@@ -281,3 +281,58 @@ test("native export accepts markdown from followed opaqueredirect in fetch mode"
     globalThis.XMLHttpRequest = originalXhr;
   }
 });
+
+test("native export requests attachments when it starts documents.export itself", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalXhr = globalThis.XMLHttpRequest;
+  let exportBody = null;
+
+  globalThis.XMLHttpRequest = undefined;
+  globalThis.fetch = async (url, init = {}) => {
+    const href = String(url);
+
+    if (href.includes("/api/documents.export")) {
+      exportBody = JSON.parse(String(init.body || "{}"));
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          data: {
+            fileOperation: {
+              id: "op-id"
+            }
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    }
+
+    if (href.includes("/api/fileOperations.redirect")) {
+      return new Response("# Export\n", {
+        status: 200,
+        headers: {
+          "content-type": "text/markdown"
+        }
+      });
+    }
+
+    throw new Error(`Unexpected fetch: ${href}`);
+  };
+
+  try {
+    const result = await requestYonoteNativeExport({
+      baseOrigin: "https://practicum.yonote.ru",
+      documentId: "doc-id"
+    });
+
+    assert.equal(result.markdown, "# Export");
+    assert.equal(exportBody.options.includeAttachments, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.XMLHttpRequest = originalXhr;
+  }
+});

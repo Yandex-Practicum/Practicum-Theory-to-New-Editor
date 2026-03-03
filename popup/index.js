@@ -6,6 +6,8 @@ const copyButton = document.getElementById("copy-source");
 const insertButton = document.getElementById("insert-source");
 const copyPreviewButton = document.getElementById("copy-preview");
 const statusEl = document.getElementById("status");
+const statusTextEl = document.getElementById("status-text");
+const cancelTaskButton = document.getElementById("cancel-task");
 const previewEl = document.getElementById("preview");
 const sourceEl = document.getElementById("meta-source");
 const documentEl = document.getElementById("meta-document");
@@ -42,6 +44,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (copyPreviewButton) {
     copyPreviewButton.addEventListener("click", () => {
       copyPreviewToClipboard();
+    });
+  }
+
+  if (cancelTaskButton) {
+    cancelTaskButton.addEventListener("click", () => {
+      cancelBackgroundTask();
     });
   }
 
@@ -99,7 +107,11 @@ function setStatus(message, type = "info") {
     return;
   }
 
-  statusEl.textContent = message;
+  if (statusTextEl) {
+    statusTextEl.textContent = message;
+  } else {
+    statusEl.textContent = message;
+  }
   statusEl.className = type === "info" ? "" : type;
 }
 
@@ -175,6 +187,7 @@ function hasStoredPreview() {
 
 function syncButtons() {
   const disableActions = state.isRequestPending || isBackgroundTaskBusy(state.activeTask);
+  const showCancel = isBackgroundTaskBusy(state.activeTask);
 
   if (copyButton) {
     copyButton.disabled = disableActions;
@@ -186,6 +199,11 @@ function syncButtons() {
 
   if (copyPreviewButton) {
     copyPreviewButton.disabled = !hasStoredPreview();
+  }
+
+  if (cancelTaskButton) {
+    cancelTaskButton.hidden = !showCancel;
+    cancelTaskButton.disabled = state.isRequestPending || !showCancel;
   }
 }
 
@@ -267,6 +285,28 @@ async function startBackgroundAction(messageType) {
     }
 
     setStatus((response && response.error) || "Не удалось запустить фоновую задачу.", "error");
+  } catch (error) {
+    setStatus(humanizeRuntimeError(error), "error");
+  } finally {
+    state.isRequestPending = false;
+    syncButtons();
+  }
+}
+
+async function cancelBackgroundTask() {
+  if (state.isRequestPending || !isBackgroundTaskBusy(state.activeTask)) {
+    renderTaskStatus();
+    return;
+  }
+
+  state.isRequestPending = true;
+  setStatus("Прерываю задачу...", "warning");
+  syncButtons();
+
+  try {
+    const response = await sendRuntimeMessage({ type: BACKGROUND_MESSAGE_TYPES.CANCEL_ACTIVE_TASK });
+    state.activeTask = response && response.task ? response.task : null;
+    renderTaskStatus();
   } catch (error) {
     setStatus(humanizeRuntimeError(error), "error");
   } finally {

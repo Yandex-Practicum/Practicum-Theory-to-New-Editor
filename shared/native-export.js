@@ -154,9 +154,37 @@ export function pickPrimaryMarkdownZipEntry(entries) {
   return markdownEntries[0];
 }
 
-async function delay(ms) {
+function createAbortError() {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal) {
+  if (signal && signal.aborted) {
+    throw createAbortError();
+  }
+}
+
+async function delay(ms, signal) {
+  throwIfAborted(signal);
   return new Promise(resolve => {
-    globalThis.setTimeout(resolve, ms);
+    const timeoutId = globalThis.setTimeout(() => {
+      if (signal && abortHandler) {
+        signal.removeEventListener("abort", abortHandler);
+      }
+      resolve();
+    }, ms);
+
+    let abortHandler = null;
+    if (signal) {
+      abortHandler = () => {
+        globalThis.clearTimeout(timeoutId);
+        signal.removeEventListener("abort", abortHandler);
+        resolve();
+      };
+      signal.addEventListener("abort", abortHandler, { once: true });
+    }
   });
 }
 
@@ -215,17 +243,31 @@ function parseXhrHeaders(rawHeaders) {
   return headers;
 }
 
-function requestArrayBufferViaXhr(url, headers) {
+function requestArrayBufferViaXhr(url, headers, signal) {
   return new Promise((resolve, reject) => {
     if (typeof XMLHttpRequest === "undefined") {
       reject(new Error("XMLHttpRequest is not available."));
       return;
     }
 
+    throwIfAborted(signal);
+
     const xhr = new XMLHttpRequest();
     xhr.open("GET", url, true);
     xhr.responseType = "arraybuffer";
     xhr.withCredentials = true;
+
+    let abortHandler = null;
+    if (signal) {
+      abortHandler = () => {
+        try {
+          xhr.abort();
+        } catch {
+          // Best-effort abort.
+        }
+      };
+      signal.addEventListener("abort", abortHandler, { once: true });
+    }
 
     Object.entries(headers || {}).forEach(([key, value]) => {
       if (value) {
@@ -234,6 +276,9 @@ function requestArrayBufferViaXhr(url, headers) {
     });
 
     xhr.onload = () => {
+      if (signal && abortHandler) {
+        signal.removeEventListener("abort", abortHandler);
+      }
       resolve({
         status: xhr.status,
         response: xhr.response,
@@ -243,10 +288,16 @@ function requestArrayBufferViaXhr(url, headers) {
     };
 
     xhr.onerror = () => {
+      if (signal && abortHandler) {
+        signal.removeEventListener("abort", abortHandler);
+      }
       reject(new Error("XHR network error"));
     };
 
     xhr.onabort = () => {
+      if (signal && abortHandler) {
+        signal.removeEventListener("abort", abortHandler);
+      }
       reject(new Error("XHR aborted"));
     };
 
@@ -258,8 +309,10 @@ async function fetchArchiveFromOperationRedirect({
   baseOrigin,
   operationId,
   authBearer,
-  editorVersion
+  editorVersion,
+  signal
 }) {
+  throwIfAborted(signal);
   const response = await fetch(
     new URL(`/api/fileOperations.redirect?id=${encodeURIComponent(operationId)}`, baseOrigin).href,
     {
@@ -267,7 +320,8 @@ async function fetchArchiveFromOperationRedirect({
       credentials: "include",
       headers: buildApiHeaders(authBearer, editorVersion, false),
       redirect: "follow",
-      cache: "no-store"
+      cache: "no-store",
+      signal
     }
   );
 
@@ -278,7 +332,8 @@ async function pollNativeExportArchiveViaXhr({
   baseOrigin,
   operationId,
   authBearer,
-  editorVersion
+  editorVersion,
+  signal
 }) {
   let lastSnapshot = null;
   let lastNetworkError = null;
@@ -286,8 +341,9 @@ async function pollNativeExportArchiveViaXhr({
   const headers = buildApiHeaders(authBearer, editorVersion, false);
 
   for (let attempt = 0; attempt < 60; attempt += 1) {
+    throwIfAborted(signal);
     try {
-      const response = await requestArrayBufferViaXhr(redirectUrl, headers);
+      const response = await requestArrayBufferViaXhr(redirectUrl, headers, signal);
       const contentType = response.headers.get("content-type") || "";
       const byteLength =
         response.response && typeof response.response.byteLength === "number"
@@ -319,7 +375,7 @@ async function pollNativeExportArchiveViaXhr({
       });
     }
 
-    await delay(500);
+    await delay(500, signal);
   }
 
   if (lastNetworkError instanceof Error && lastNetworkError.message) {
@@ -339,7 +395,8 @@ export async function requestYonoteNativeExport({
   operationId: initialOperationId,
   downloadUrl,
   authBearer,
-  editorVersion
+  editorVersion,
+  signal
 }) {
   let archiveUrl = String(downloadUrl || "").trim();
   let operationId = String(initialOperationId || "").trim();
@@ -355,14 +412,16 @@ export async function requestYonoteNativeExport({
   });
 
   if (!archiveUrl && !operationId) {
+    throwIfAborted(signal);
     const exportResponse = await fetch(new URL("/api/documents.export", baseOrigin).href, {
       method: "POST",
       credentials: "include",
       headers: buildApiHeaders(authBearer, editorVersion, true),
+      signal,
       body: JSON.stringify({
         id: documentId,
         options: {
-          includeAttachments: false,
+          includeAttachments: true,
           delimiter: ";",
           includeChildren: false
         }
@@ -401,7 +460,8 @@ export async function requestYonoteNativeExport({
       baseOrigin,
       operationId,
       authBearer,
-      editorVersion
+      editorVersion,
+      signal
     });
   }
 
@@ -409,6 +469,7 @@ export async function requestYonoteNativeExport({
     let lastNetworkError = null;
 
     for (let attempt = 0; attempt < 60; attempt += 1) {
+      throwIfAborted(signal);
       try {
         const response = await fetch(
           new URL(`/api/fileOperations.redirect?id=${encodeURIComponent(operationId)}`, baseOrigin).href,
@@ -417,7 +478,8 @@ export async function requestYonoteNativeExport({
             credentials: "include",
             headers: buildApiHeaders(authBearer, editorVersion, false),
             redirect: "manual",
-            cache: "no-store"
+            cache: "no-store",
+            signal
           }
         );
 
@@ -474,7 +536,8 @@ export async function requestYonoteNativeExport({
             baseOrigin,
             operationId,
             authBearer,
-            editorVersion
+            editorVersion,
+            signal
           });
           const followedContentType = followedResponse.headers.get("content-type") || "";
 
@@ -509,7 +572,7 @@ export async function requestYonoteNativeExport({
         });
       }
 
-      await delay(500);
+      await delay(500, signal);
     }
 
     if (!archiveUrl && !directArchiveResponse) {
@@ -527,11 +590,13 @@ export async function requestYonoteNativeExport({
   }
 
   if (!downloadedPayload) {
+    throwIfAborted(signal);
     const downloadResponse =
       directArchiveResponse ||
       (await fetch(archiveUrl, {
         method: "GET",
-        cache: "no-store"
+        cache: "no-store",
+        signal
       }));
 
     const contentType = downloadResponse.headers.get("content-type") || "";

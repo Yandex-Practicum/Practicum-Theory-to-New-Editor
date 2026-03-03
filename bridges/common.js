@@ -1,5 +1,5 @@
 (function initPracticumHelperBridgeShared() {
-  const BRIDGE_BUILD = "3.3.2-background-worker";
+  const BRIDGE_BUILD = "3.4.0-background-worker";
   const existingShared = globalThis.PracticumHelperBridgeShared;
   if (existingShared && existingShared.bridgeVersion === BRIDGE_BUILD) {
     return;
@@ -11,14 +11,17 @@
 
   const MESSAGE_TYPES = {
     COPY_FROM_YONOTE: scopeBridgeName("PH_COPY_FROM_YONOTE"),
-    APPEND_TEXT_BLOCKS: scopeBridgeName("PH_APPEND_TEXT_BLOCKS")
+    APPEND_TEXT_BLOCKS: scopeBridgeName("PH_APPEND_TEXT_BLOCKS"),
+    UPLOAD_THEORY_RESOURCE: scopeBridgeName("PH_UPLOAD_THEORY_RESOURCE")
   };
 
   const EVENT_TYPES = {
     YONOTE_COPY_REQUEST: scopeBridgeName("PH_YONOTE_COPY_REQUEST"),
     YONOTE_COPY_RESPONSE: scopeBridgeName("PH_YONOTE_COPY_RESPONSE"),
     THEORY_APPEND_REQUEST: scopeBridgeName("PH_THEORY_APPEND_REQUEST"),
-    THEORY_APPEND_RESPONSE: scopeBridgeName("PH_THEORY_APPEND_RESPONSE")
+    THEORY_APPEND_RESPONSE: scopeBridgeName("PH_THEORY_APPEND_RESPONSE"),
+    THEORY_UPLOAD_RESOURCE_REQUEST: scopeBridgeName("PH_THEORY_UPLOAD_RESOURCE_REQUEST"),
+    THEORY_UPLOAD_RESOURCE_RESPONSE: scopeBridgeName("PH_THEORY_UPLOAD_RESOURCE_RESPONSE")
   };
 
   const YONOTE_DOC_PATH_RE = /^\/doc\/([^/?#]+)/i;
@@ -2542,6 +2545,120 @@
     };
   }
 
+  function isAbsoluteHttpUrl(value) {
+    return /^https?:\/\//i.test(String(value || "").trim());
+  }
+
+  function unwrapMarkdownLinkTarget(target) {
+    const trimmed = String(target || "").trim();
+    if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
+      return trimmed.slice(1, -1).trim();
+    }
+
+    return trimmed;
+  }
+
+  function extractItalicOnlyCaption(markdown) {
+    const trimmed = trimBlockText(markdown);
+    const match = trimmed.match(/^\*([^*\n]+)\*$/);
+    return match ? trimBlockText(match[1]) : "";
+  }
+
+  function buildImageBlockMarkdown(alt, url, caption) {
+    const normalizedAlt = String(alt || "").trim();
+    const normalizedUrl = String(url || "").trim();
+    const normalizedCaption = String(caption || "").trim();
+    const base = `![${normalizedAlt}](${normalizedUrl})`;
+    return normalizedCaption ? `${base}*${normalizedCaption}*` : base;
+  }
+
+  function parseStandaloneImageParagraph(markdown) {
+    const normalized = normalizeNewlines(trimBlockText(markdown));
+    if (!normalized) {
+      return null;
+    }
+
+    const lines = normalized
+      .split("\n")
+      .map(line => String(line || "").trim())
+      .filter(Boolean);
+
+    if (!lines.length || lines.length > 2) {
+      return null;
+    }
+
+    const firstLineMatch = lines[0].match(/^!\[([^\]]*)\]\(([^)\n]+)\)(?:\s*(\*([^*\n]+)\*))?$/);
+    if (!firstLineMatch) {
+      return null;
+    }
+
+    const alt = trimBlockText(firstLineMatch[1] || "");
+    const url = unwrapMarkdownLinkTarget(firstLineMatch[2] || "");
+    if (!isAbsoluteHttpUrl(url)) {
+      return null;
+    }
+
+    let caption = trimBlockText(firstLineMatch[4] || "");
+    if (!caption && lines.length === 2) {
+      caption = extractItalicOnlyCaption(lines[1]);
+      if (!caption) {
+        return null;
+      }
+    }
+
+    return {
+      alt,
+      url,
+      caption
+    };
+  }
+
+  function enrichCompiledBlocksWithImages(blocks) {
+    const normalizedBlocks = Array.isArray(blocks) ? blocks : [];
+    const enriched = [];
+
+    for (let index = 0; index < normalizedBlocks.length; index += 1) {
+      const block = normalizedBlocks[index];
+      if (!block || block.kind !== "paragraph") {
+        if (block) {
+          enriched.push(block);
+        }
+        continue;
+      }
+
+      const inlineImage = parseStandaloneImageParagraph(block.markdown);
+      if (!inlineImage) {
+        enriched.push(block);
+        continue;
+      }
+
+      let caption = inlineImage.caption;
+      if (!caption && index + 1 < normalizedBlocks.length) {
+        const nextBlock = normalizedBlocks[index + 1];
+        if (nextBlock && nextBlock.kind === "paragraph") {
+          const nextCaption = extractItalicOnlyCaption(nextBlock.markdown);
+          if (nextCaption) {
+            caption = nextCaption;
+            index += 1;
+          }
+        }
+      }
+
+      enriched.push({
+        kind: "image",
+        markdown: buildImageBlockMarkdown(inlineImage.alt, inlineImage.url, caption),
+        alt: inlineImage.alt,
+        url: inlineImage.url,
+        caption,
+        meta: {
+          blockType: "Image"
+        }
+      });
+    }
+
+    return enriched;
+  }
+
   function compileTheoryBlocks(markdown) {
     const lines = normalizeNewlines(markdown)
       .replace(/\u00a0/g, " ")
@@ -2647,7 +2764,7 @@
       if (block) blocks.push(block);
     }
 
-    return blocks;
+    return enrichCompiledBlocksWithImages(blocks);
   }
 
   function getYonoteSlugFromPath(pathname) {
@@ -2765,6 +2882,30 @@
   }
 
   function buildTheoryBlockPayload(block, context) {
+    if (block && block.kind === "image") {
+      const caption = String(block.caption || "").trim();
+      const url = String(block.url || "").trim();
+      const alt = String(block.alt || "").trim();
+
+      return {
+        tree_id: context.treeId,
+        type: "Markdown",
+        content: {
+          type: "theory",
+          markdown: buildImageBlockMarkdown(alt, url, caption),
+          url,
+          alt,
+          caption
+        },
+        parent: context.rootBlockId,
+        nested: [],
+        meta: {
+          ...(block.meta || {}),
+          blockType: "Image"
+        }
+      };
+    }
+
     return {
       tree_id: context.treeId,
       type: "Markdown",

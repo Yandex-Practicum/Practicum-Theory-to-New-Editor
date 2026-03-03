@@ -2,6 +2,7 @@ import { BRIDGE_KINDS, BACKGROUND_MESSAGE_TYPES } from "./shared/constants.js";
 import { sendMessageWithBridgeFreshness } from "./shared/bridge-freshness.js";
 import { createBackgroundController, isBackgroundRuntimeMessage } from "./shared/background-controller.js";
 import { requestYonoteNativeExport } from "./shared/native-export.js";
+import { clearSourceAssets, loadSourceAssetBytes, replaceSourceAssets } from "./shared/source-assets.js";
 import { loadActiveTask, loadStoredSource, saveActiveTask, saveStoredSource } from "./shared/storage.js";
 import { connectToTab, executeFilesInTab, getActiveTab, reloadTab, sendMessageToTab } from "./shared/tabs.js";
 
@@ -36,6 +37,9 @@ const backgroundController = createBackgroundController({
   saveActiveTask,
   loadStoredSource,
   saveStoredSource,
+  replaceSourceAssets,
+  loadSourceAssetBytes,
+  clearSourceAssets,
   getActiveTab,
   sendBridgeMessage,
   requestNativeExport: requestYonoteNativeExport,

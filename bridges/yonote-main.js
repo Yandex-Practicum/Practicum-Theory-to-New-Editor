@@ -303,7 +303,7 @@
       body: JSON.stringify({
         id: documentData.id,
         options: {
-          includeAttachments: false,
+          includeAttachments: true,
           delimiter: ";",
           includeChildren: false
         }
@@ -452,7 +452,7 @@
       body: JSON.stringify({
         id: documentData.id,
         options: {
-          includeAttachments: false,
+          includeAttachments: true,
           delimiter: ";",
           includeChildren: false
         }

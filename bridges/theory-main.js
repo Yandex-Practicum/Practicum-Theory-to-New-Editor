@@ -200,6 +200,125 @@
     }
   }
 
+  function decodeBase64ToUint8Array(value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) {
+      return new Uint8Array();
+    }
+
+    if (typeof atob === "function") {
+      const binary = atob(normalized);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes;
+    }
+
+    if (typeof Buffer !== "undefined") {
+      return new Uint8Array(Buffer.from(normalized, "base64"));
+    }
+
+    throw new Error("Не удалось декодировать binary payload.");
+  }
+
+  async function handleUploadResourceRequest(detail) {
+    const requestId = detail && detail.requestId;
+    const fileName = typeof detail?.fileName === "string" ? detail.fileName.trim() : "";
+    const mimeType = typeof detail?.mimeType === "string" ? detail.mimeType.trim() : "";
+    const bytesBase64 = typeof detail?.bytesBase64 === "string" ? detail.bytesBase64 : "";
+
+    if (!requestId) {
+      return;
+    }
+
+    if (!shared.isTheoryPath(window.location.pathname)) {
+      respondUpload(requestId, {
+        success: false,
+        error: "Откройте страницу урока, URL которой заканчивается на /theory/."
+      });
+      return;
+    }
+
+    if (!context.authToken) {
+      respondUpload(requestId, {
+        success: false,
+        error: "Не удалось поймать API-контекст. Перезагрузите страницу теории и повторите."
+      });
+      return;
+    }
+
+    if (!fileName || !bytesBase64) {
+      respondUpload(requestId, {
+        success: false,
+        error: "Нет binary payload для загрузки ресурса."
+      });
+      return;
+    }
+
+    try {
+      const bytes = decodeBase64ToUint8Array(bytesBase64);
+      if (!bytes.length) {
+        respondUpload(requestId, {
+          success: false,
+          error: "Пустой binary payload для загрузки ресурса."
+        });
+        return;
+      }
+
+      const formData = new FormData();
+      const fileLike =
+        typeof File === "function"
+          ? new File([bytes], fileName, { type: mimeType || "application/octet-stream" })
+          : new Blob([bytes], { type: mimeType || "application/octet-stream" });
+
+      formData.append("file", fileLike, fileName);
+
+      const response = await globalThis.fetch("/api/resources/", {
+        method: "POST",
+        credentials: "include",
+        headers: createHeaders(false),
+        body: formData
+      });
+      const payload = await response.json().catch(() => null);
+
+      if (shared.isAuthFailure(response.status)) {
+        context.authToken = "";
+        respondUpload(requestId, {
+          success: false,
+          error: "Авторизация Praktikum истекла. Обновите страницу и попробуйте снова."
+        });
+        return;
+      }
+
+      if (
+        !response.ok ||
+        !payload ||
+        typeof payload.id !== "number" ||
+        typeof payload.file !== "string" ||
+        !payload.file
+      ) {
+        respondUpload(requestId, {
+          success: false,
+          error: "Не удалось загрузить ресурс в Praktikum."
+        });
+        return;
+      }
+
+      respondUpload(requestId, {
+        success: true,
+        resourceId: payload.id,
+        fileUrl: payload.file,
+        resourceType: typeof payload.resource_type === "string" ? payload.resource_type : ""
+      });
+    } catch (error) {
+      respondUpload(requestId, {
+        success: false,
+        error: error instanceof Error ? error.message : "Ошибка загрузки ресурса."
+      });
+    }
+  }
+
   async function handleAppendRequest(detail) {
     const requestId = detail && detail.requestId;
     const markdown = typeof detail?.markdown === "string" ? detail.markdown : "";
@@ -332,11 +451,13 @@
       }
 
       const tableCount = compiledBlocks.filter(block => block.kind === "table").length;
+      const imageCount = compiledBlocks.filter(block => block.kind === "image").length;
       respond(requestId, {
         success: true,
         createdIds,
         appendedCount: createdIds.length,
         tableCount,
+        imageCount,
         partial: false
       });
     } catch (error) {
@@ -361,10 +482,24 @@
     );
   }
 
+  function respondUpload(requestId, result) {
+    globalThis.dispatchEvent(
+      new CustomEvent(shared.EVENT_TYPES.THEORY_UPLOAD_RESOURCE_RESPONSE, {
+        detail: {
+          requestId,
+          result: shared.createBridgeEnvelope("theory", result)
+        }
+      })
+    );
+  }
+
   patchFetch();
   patchXhr();
 
   globalThis.addEventListener(shared.EVENT_TYPES.THEORY_APPEND_REQUEST, event => {
     handleAppendRequest(event.detail || {});
+  });
+  globalThis.addEventListener(shared.EVENT_TYPES.THEORY_UPLOAD_RESOURCE_REQUEST, event => {
+    handleUploadResourceRequest(event.detail || {});
   });
 })();
