@@ -30,7 +30,7 @@ function createHarness(overrides = {}) {
       overrides.sendBridgeMessage ||
       (async () => ({
         success: true,
-        bridgeVersion: "3.3.1-background-worker",
+        bridgeVersion: "3.3.2-background-worker",
         nativeExportContext: {
           title: "Doc title",
           sourceUrl: "https://practicum.yonote.ru/doc/test-doc",
@@ -110,7 +110,7 @@ test("copy flow uses native-export context and saves payload from the background
       preferredMode = message.preferredMode;
       return {
         success: true,
-        bridgeVersion: "3.3.1-background-worker",
+        bridgeVersion: "3.3.2-background-worker",
         diagnostics: {
           renderApiPath: "/api/documents.export"
         },

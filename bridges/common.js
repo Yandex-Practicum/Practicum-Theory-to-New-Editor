@@ -1,5 +1,5 @@
 (function initPracticumHelperBridgeShared() {
-  const BRIDGE_BUILD = "3.3.1-background-worker";
+  const BRIDGE_BUILD = "3.3.2-background-worker";
   const existingShared = globalThis.PracticumHelperBridgeShared;
   if (existingShared && existingShared.bridgeVersion === BRIDGE_BUILD) {
     return;
