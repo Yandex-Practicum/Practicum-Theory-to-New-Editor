@@ -94,6 +94,35 @@ function stripWrappedLinkTarget(target) {
   return trimmed;
 }
 
+function parseMarkdownImageLinkTarget(rawTarget) {
+  const trimmed = String(rawTarget || "").trim();
+  if (!trimmed) {
+    return {
+      path: "",
+      title: ""
+    };
+  }
+
+  const match = trimmed.match(/^(.*?)(?:\s+("([^"]*)"|'([^']*)'))?$/);
+  const pathPart = stripWrappedLinkTarget(match && match[1] ? match[1] : trimmed);
+  const titlePart = String((match && (match[3] || match[4])) || "").trim();
+
+  return {
+    path: pathPart,
+    title: titlePart
+  };
+}
+
+function formatMarkdownImageLinkTarget(path, title) {
+  const normalizedPath = String(path || "").trim();
+  const normalizedTitle = String(title || "").trim();
+  if (!normalizedTitle) {
+    return normalizedPath;
+  }
+
+  return `${normalizedPath} "${normalizedTitle.replace(/"/g, '\\"')}"`;
+}
+
 function isExternalAssetTarget(target) {
   return /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(String(target || "").trim());
 }
@@ -136,7 +165,7 @@ function getSupportedImageMimeType(path) {
 }
 
 function resolveAssetPath(target, baseDir) {
-  const rawTarget = stripWrappedLinkTarget(target);
+  const rawTarget = parseMarkdownImageLinkTarget(target).path;
   if (!rawTarget || isExternalAssetTarget(rawTarget)) {
     return "";
   }
@@ -308,12 +337,16 @@ function rewriteMarkdownImageTargets(markdown, assetBasePath, uploadedAssetUrls)
   const imageRe = /!\[([^\]]*)]\(([^)\n]+)\)/g;
 
   return String(markdown || "").replace(imageRe, (match, altText, target) => {
-    const normalizedTarget = resolveAssetPath(target, assetBasePath);
+    const parsedTarget = parseMarkdownImageLinkTarget(target);
+    const normalizedTarget = resolveAssetPath(parsedTarget.path, assetBasePath);
     if (!normalizedTarget || !uploadedAssetUrls.has(normalizedTarget)) {
       return match;
     }
 
-    return `![${String(altText || "")}](${uploadedAssetUrls.get(normalizedTarget)})`;
+    return `![${String(altText || "")}](${formatMarkdownImageLinkTarget(
+      uploadedAssetUrls.get(normalizedTarget),
+      parsedTarget.title
+    )})`;
   });
 }
 

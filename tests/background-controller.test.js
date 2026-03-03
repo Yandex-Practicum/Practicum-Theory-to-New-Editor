@@ -54,7 +54,7 @@ function createHarness(overrides = {}) {
       overrides.sendBridgeMessage ||
       (async () => ({
         success: true,
-        bridgeVersion: "3.4.0-background-worker",
+        bridgeVersion: "3.4.1-background-worker",
         nativeExportContext: {
           title: "Doc title",
           sourceUrl: "https://practicum.yonote.ru/doc/test-doc",
@@ -134,7 +134,7 @@ test("copy flow uses native-export context and saves payload from the background
       preferredMode = message.preferredMode;
       return {
         success: true,
-        bridgeVersion: "3.4.0-background-worker",
+        bridgeVersion: "3.4.1-background-worker",
         diagnostics: {
           renderApiPath: "/api/documents.export"
         },
@@ -201,6 +201,34 @@ test("copy flow stores referenced image assets from native export", async () => 
   assert.equal(state.source.assets[0].id, "assets/picture.png");
   assert.equal(state.savedAssetWrites.length, 1);
   assert.equal(state.savedAssetWrites[0].assets.length, 1);
+});
+
+test("copy flow stores image assets when markdown image includes a title attribute", async () => {
+  const { controller, state } = createHarness({
+    requestNativeExport: async () => ({
+      markdown:
+        '![ALT](uploads/doc-1/image.png "Пример стандартного резюме|||aspect=1")',
+      entries: [
+        {
+          name: "lesson.md",
+          data: new Uint8Array([35, 32, 84])
+        },
+        {
+          name: "uploads/doc-1/image.png",
+          data: new Uint8Array([1, 2, 3, 4])
+        }
+      ]
+    })
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_COPY_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.equal(state.task.stage, "success");
+  assert.equal(state.source.assetCount, 1);
+  assert.equal(state.source.assets[0].id, "uploads/doc-1/image.png");
 });
 
 test("copy flow humanizes message-channel-closed bridge errors", async () => {
@@ -418,6 +446,63 @@ test("insert flow uploads stored images and rewrites markdown before append", as
   assert.equal(state.task.result.skippedImageCount, 0);
   assert.equal(state.clearedSourceAssets, 1);
   assert.equal(state.source.assetCount, 0);
+});
+
+test("insert flow preserves markdown image title metadata when rewriting uploaded urls", async () => {
+  let appendMarkdown = "";
+
+  const { controller, state } = createHarness({
+    initialSource: {
+      markdown:
+        '![ALT](uploads/doc-1/image.png "Пример стандартного резюме|||aspect=1")',
+      sourceStorageId: "source-1",
+      assetBasePath: "",
+      assets: [
+        {
+          id: "uploads/doc-1/image.png",
+          path: "uploads/doc-1/image.png",
+          fileName: "image.png",
+          mimeType: "image/png",
+          byteLength: 3
+        }
+      ]
+    },
+    initialSourceAssets: new Map([["source-1:uploads/doc-1/image.png", new Uint8Array([1, 2, 3]).buffer]]),
+    getActiveTab: async () => ({
+      id: 77,
+      url: "https://admin.praktikum.yandex-team.ru/course/lesson/theory/"
+    }),
+    sendBridgeMessage: async ({ message }) => {
+      if (message.type === MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE) {
+        return {
+          success: true,
+          fileUrl: "https://pictures.s3.yandex.net/resources/picture_1.png"
+        };
+      }
+
+      if (message.type === MESSAGE_TYPES.APPEND_TEXT_BLOCKS) {
+        appendMarkdown = message.markdown;
+        return {
+          success: true,
+          appendedCount: 1,
+          tableCount: 0,
+          imageCount: 1
+        };
+      }
+
+      throw new Error(`Unexpected message type: ${message.type}`);
+    }
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_INSERT_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.equal(
+    appendMarkdown,
+    '![ALT](https://pictures.s3.yandex.net/resources/picture_1.png "Пример стандартного резюме|||aspect=1")'
+  );
 });
 
 test("insert reload timeout still ends with success and a warning-style message", async () => {

@@ -1,5 +1,5 @@
 (function initPracticumHelperBridgeShared() {
-  const BRIDGE_BUILD = "3.4.0-background-worker";
+  const BRIDGE_BUILD = "3.4.1-background-worker";
   const existingShared = globalThis.PracticumHelperBridgeShared;
   if (existingShared && existingShared.bridgeVersion === BRIDGE_BUILD) {
     return;
@@ -2558,6 +2558,36 @@
     return trimmed;
   }
 
+  function parseMarkdownImageLinkTarget(target) {
+    const trimmed = String(target || "").trim();
+    if (!trimmed) {
+      return {
+        url: "",
+        title: ""
+      };
+    }
+
+    const match = trimmed.match(/^(.*?)(?:\s+("([^"]*)"|'([^']*)'))?$/);
+    return {
+      url: unwrapMarkdownLinkTarget(match && match[1] ? match[1] : trimmed),
+      title: trimBlockText((match && (match[3] || match[4])) || "")
+    };
+  }
+
+  function extractCaptionFromImageTitle(title) {
+    const normalized = trimBlockText(title);
+    if (!normalized) {
+      return "";
+    }
+
+    const separatorIndex = normalized.indexOf("|||");
+    if (separatorIndex < 0) {
+      return normalized;
+    }
+
+    return trimBlockText(normalized.slice(0, separatorIndex));
+  }
+
   function extractItalicOnlyCaption(markdown) {
     const trimmed = trimBlockText(markdown);
     const match = trimmed.match(/^\*([^*\n]+)\*$/);
@@ -2587,18 +2617,19 @@
       return null;
     }
 
-    const firstLineMatch = lines[0].match(/^!\[([^\]]*)\]\(([^)\n]+)\)(?:\s*(\*([^*\n]+)\*))?$/);
+    const firstLineMatch = lines[0].match(/^!\[([^\]]*)\]\((.+?)\)(?:\s*(\*([^*\n]+)\*))?$/);
     if (!firstLineMatch) {
       return null;
     }
 
     const alt = trimBlockText(firstLineMatch[1] || "");
-    const url = unwrapMarkdownLinkTarget(firstLineMatch[2] || "");
+    const parsedTarget = parseMarkdownImageLinkTarget(firstLineMatch[2] || "");
+    const url = parsedTarget.url;
     if (!isAbsoluteHttpUrl(url)) {
       return null;
     }
 
-    let caption = trimBlockText(firstLineMatch[4] || "");
+    let caption = trimBlockText(firstLineMatch[4] || "") || extractCaptionFromImageTitle(parsedTarget.title);
     if (!caption && lines.length === 2) {
       caption = extractItalicOnlyCaption(lines[1]);
       if (!caption) {

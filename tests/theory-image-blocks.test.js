@@ -62,3 +62,17 @@ test("buildTheoryBlockPayload serializes image captions in ui-compatible markdow
   );
   assert.equal(payload.meta.blockType, "Image");
 });
+
+test("compileTheoryBlocks extracts caption from markdown image title metadata", () => {
+  const shared = loadShared();
+
+  const blocks = shared.compileTheoryBlocks(
+    '![ALT](https://pictures.s3.yandex.net/resources/picture.png "Пример стандартного резюме|||aspect=1")'
+  );
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].kind, "image");
+  assert.equal(blocks[0].alt, "ALT");
+  assert.equal(blocks[0].caption, "Пример стандартного резюме");
+  assert.equal(blocks[0].meta.blockType, "Image");
+});
