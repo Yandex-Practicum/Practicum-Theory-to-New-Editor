@@ -1,0 +1,57 @@
+{
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "Содержание портфолио"
+    },
+    {
+      "type": "paragraph",
+      "text": "Короткое вводное описание перед списком."
+    },
+    {
+      "type": "bullet_list",
+      "items": [
+        {
+          "type": "list_item",
+          "text": "Онлайн-формат"
+        },
+        {
+          "type": "list_item",
+          "text": "3-5 последних кейсов"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "children": [
+        {
+          "type": "table_row",
+          "children": [
+            {
+              "type": "table_cell",
+              "text": "Критерий"
+            },
+            {
+              "type": "table_cell",
+              "text": "Хороший пример"
+            }
+          ]
+        },
+        {
+          "type": "table_row",
+          "children": [
+            {
+              "type": "table_cell",
+              "text": "Роль"
+            },
+            {
+              "type": "table_cell",
+              "text": "Понятна зона ответственности"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

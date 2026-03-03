@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Practicum Helper</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="index.js"></script>
+</head>
+<body>
+  <h1>Practicum Helper</h1>
+  <p class="subtitle">Копирует lesson text из Yonote и добавляет его в теорию.</p>
+
+  <div class="actions">
+    <button id="copy-source" type="button">Копировать</button>
+    <button id="insert-source" type="button">Добавить в теорию</button>
+  </div>
+  <div id="status" aria-live="polite"></div>
+
+  <section class="panel">
+    <div class="meta">
+      <div class="meta-line"><span class="meta-key">Источник:</span><span id="meta-source">-</span></div>
+      <div class="meta-line"><span class="meta-key">Документ:</span><a id="meta-document" href="#" target="_blank" rel="noreferrer noopener">-</a></div>
+      <div class="meta-line"><span class="meta-key">Обновлено:</span><span id="meta-time">-</span></div>
+    </div>
+    <div class="preview-shell">
+      <pre id="preview">Пока ничего не скопировано.</pre>
+      <button id="copy-preview" class="icon-button" type="button" title="Скопировать preview" aria-label="Скопировать preview">⧉</button>
+    </div>
+  </section>
+</body>
+</html>

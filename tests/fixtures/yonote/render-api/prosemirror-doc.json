@@ -1,0 +1,144 @@
+{
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 2
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Как отличить сильное резюме"
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "Короткое введение перед списком."
+          }
+        ]
+      },
+      {
+        "type": "bulletList",
+        "content": [
+          {
+            "type": "listItem",
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Первый пункт"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "listItem",
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Второй пункт"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "table",
+        "content": [
+          {
+            "type": "tableRow",
+            "content": [
+              {
+                "type": "tableHeader",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Критерий"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "tableHeader",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Комментарий"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "tableRow",
+            "content": [
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Цифры"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Нужны конкретные метрики"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "codeBlock",
+        "attrs": {
+          "language": "js"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "const score = 42;"
+          }
+        ]
+      }
+    ]
+  }
+}

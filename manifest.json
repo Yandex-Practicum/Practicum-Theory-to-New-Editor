@@ -1,0 +1,84 @@
+{
+  "manifest_version": 3,
+  "name": "practicum helper source copier",
+  "version": "3.3.1",
+  "description": "Render-aware copier from Yonote to Praktikum theory",
+  "icons": {
+    "16": "icon16.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://yonote.ru/*",
+    "https://*.yonote.ru/*",
+    "https://storage.yandexcloud.net/*",
+    "https://*.storage.yandexcloud.net/*",
+    "https://admin.praktikum.yandex-team.ru/*",
+    "https://*.admin.praktikum.yandex-team.ru/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://yonote.ru/*",
+        "https://*.yonote.ru/*"
+      ],
+      "js": [
+        "bridges/common.js",
+        "bridges/yonote-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://yonote.ru/*",
+        "https://*.yonote.ru/*"
+      ],
+      "js": [
+        "bridges/common.js",
+        "bridges/yonote-relay.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://admin.praktikum.yandex-team.ru/*",
+        "https://*.admin.praktikum.yandex-team.ru/*"
+      ],
+      "js": [
+        "bridges/common.js",
+        "bridges/theory-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://admin.praktikum.yandex-team.ru/*",
+        "https://*.admin.praktikum.yandex-team.ru/*"
+      ],
+      "js": [
+        "bridges/common.js",
+        "bridges/theory-relay.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icon16.png"
+    }
+  }
+}
