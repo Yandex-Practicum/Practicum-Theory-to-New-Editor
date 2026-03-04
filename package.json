@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "pack:publish": "node -e \"const fs=require('node:fs'); const cp=require('node:child_process'); const out='practicum-theory-to-new-editor.zip'; if (fs.existsSync(out)) fs.rmSync(out); const files=cp.execSync('git ls-files', { encoding: 'utf8' }).trim().split('\\n').filter(Boolean).filter((file) => !file.startsWith('tests/') && file !== '.gitignore' && file !== 'package.json' && file !== 'package-lock.json'); if (!files.length) { throw new Error('No files selected for archive'); } const result=cp.spawnSync('zip', ['-q', '-r', out, ...files], { stdio: 'inherit' }); if (result.status !== 0) { process.exit(result.status ?? 1); }\""
   },
   "devDependencies": {
     "jsdom": "^24.1.3"
