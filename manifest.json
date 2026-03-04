@@ -5,7 +5,8 @@
   "version": "3.5.3",
   "description": "Render-aware copier from Yonote and Wiki to Praktikum theory",
   "icons": {
-    "16": "icon16.png"
+    "16": "icon16.png",
+    "128": "icon128.png"
   },
   "background": {
     "service_worker": "background.js",
