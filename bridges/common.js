@@ -1,5 +1,5 @@
 (function initPracticumHelperBridgeShared() {
-  const BRIDGE_BUILD = "3.4.1-background-worker";
+  const BRIDGE_BUILD = "3.4.4-background-worker";
   const existingShared = globalThis.PracticumHelperBridgeShared;
   if (existingShared && existingShared.bridgeVersion === BRIDGE_BUILD) {
     return;
@@ -2574,18 +2574,23 @@
     };
   }
 
+  function isImageTitleMetadataSegment(value) {
+    return /^[a-z][a-z0-9_-]*=\S+$/i.test(String(value || "").trim());
+  }
+
   function extractCaptionFromImageTitle(title) {
     const normalized = trimBlockText(title);
     if (!normalized) {
       return "";
     }
 
-    const separatorIndex = normalized.indexOf("|||");
-    if (separatorIndex < 0) {
-      return normalized;
+    const parts = normalized.split("|||").map(part => trimBlockText(part));
+    if (parts.length === 1) {
+      return isImageTitleMetadataSegment(normalized) ? "" : normalized;
     }
 
-    return trimBlockText(normalized.slice(0, separatorIndex));
+    const captionPart = parts.find(part => part && !isImageTitleMetadataSegment(part));
+    return captionPart || "";
   }
 
   function extractItalicOnlyCaption(markdown) {
@@ -2594,12 +2599,29 @@
     return match ? trimBlockText(match[1]) : "";
   }
 
-  function buildImageBlockMarkdown(alt, url, caption) {
+  function buildMarkdownImageLinkTarget(url, title) {
+    const normalizedUrl = String(url || "").trim();
+    const normalizedTitle = String(title || "").trim();
+    if (!normalizedTitle) {
+      return normalizedUrl;
+    }
+
+    const escapedTitle = normalizedTitle.replace(/"/g, '\\"');
+    return `${normalizedUrl} "${escapedTitle}"`;
+  }
+
+  function buildImageBlockMarkdown(alt, url, caption, options = {}) {
     const normalizedAlt = String(alt || "").trim();
     const normalizedUrl = String(url || "").trim();
     const normalizedCaption = String(caption || "").trim();
-    const base = `![${normalizedAlt}](${normalizedUrl})`;
-    return normalizedCaption ? `${base}*${normalizedCaption}*` : base;
+    const normalizedLinkTitle = String(options.linkTitle || "").trim();
+    const base = `![${normalizedAlt}](${buildMarkdownImageLinkTarget(normalizedUrl, normalizedLinkTitle)})`;
+    if (!normalizedCaption) {
+      return base;
+    }
+
+    // Keep the visible caption in markdown even when it originated in the link title.
+    return `${base}*${normalizedCaption}*`;
   }
 
   function parseStandaloneImageParagraph(markdown) {
@@ -2629,18 +2651,33 @@
       return null;
     }
 
-    let caption = trimBlockText(firstLineMatch[4] || "") || extractCaptionFromImageTitle(parsedTarget.title);
+    const inlineCaption = trimBlockText(firstLineMatch[4] || "");
+    const titleCaption = extractCaptionFromImageTitle(parsedTarget.title);
+    let captionSource = "";
+    let caption = "";
+
+    if (inlineCaption) {
+      caption = inlineCaption;
+      captionSource = "inline";
+    } else if (titleCaption) {
+      caption = titleCaption;
+      captionSource = "title";
+    }
+
     if (!caption && lines.length === 2) {
       caption = extractItalicOnlyCaption(lines[1]);
       if (!caption) {
         return null;
       }
+      captionSource = "second-line";
     }
 
     return {
       alt,
       url,
-      caption
+      caption,
+      linkTitle: parsedTarget.title,
+      captionSource
     };
   }
 
@@ -2664,12 +2701,14 @@
       }
 
       let caption = inlineImage.caption;
+      let captionSource = inlineImage.captionSource;
       if (!caption && index + 1 < normalizedBlocks.length) {
         const nextBlock = normalizedBlocks[index + 1];
         if (nextBlock && nextBlock.kind === "paragraph") {
           const nextCaption = extractItalicOnlyCaption(nextBlock.markdown);
           if (nextCaption) {
             caption = nextCaption;
+            captionSource = "next-paragraph";
             index += 1;
           }
         }
@@ -2677,10 +2716,15 @@
 
       enriched.push({
         kind: "image",
-        markdown: buildImageBlockMarkdown(inlineImage.alt, inlineImage.url, caption),
+        markdown: buildImageBlockMarkdown(inlineImage.alt, inlineImage.url, caption, {
+          linkTitle: inlineImage.linkTitle,
+          captionSource
+        }),
         alt: inlineImage.alt,
         url: inlineImage.url,
         caption,
+        linkTitle: inlineImage.linkTitle,
+        captionSource,
         meta: {
           blockType: "Image"
         }
@@ -2917,13 +2961,20 @@
       const caption = String(block.caption || "").trim();
       const url = String(block.url || "").trim();
       const alt = String(block.alt || "").trim();
+      const markdown =
+        typeof block.markdown === "string" && block.markdown.trim()
+          ? block.markdown
+          : buildImageBlockMarkdown(alt, url, caption, {
+              linkTitle: block.linkTitle,
+              captionSource: block.captionSource
+            });
 
       return {
         tree_id: context.treeId,
         type: "Markdown",
         content: {
           type: "theory",
-          markdown: buildImageBlockMarkdown(alt, url, caption),
+          markdown,
           url,
           alt,
           caption

@@ -76,3 +76,35 @@ test("compileTheoryBlocks extracts caption from markdown image title metadata", 
   assert.equal(blocks[0].caption, "Пример стандартного резюме");
   assert.equal(blocks[0].meta.blockType, "Image");
 });
+
+test("compileTheoryBlocks ignores aspect-only image title metadata as caption", () => {
+  const shared = loadShared();
+
+  const blocks = shared.compileTheoryBlocks(
+    '![ALT](https://pictures.s3.yandex.net/resources/picture.png "aspect=1")'
+  );
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].kind, "image");
+  assert.equal(blocks[0].alt, "ALT");
+  assert.equal(blocks[0].caption, "");
+  assert.equal(blocks[0].meta.blockType, "Image");
+});
+
+test("buildTheoryBlockPayload keeps image title metadata and visible caption in markdown", () => {
+  const shared = loadShared();
+
+  const blocks = shared.compileTheoryBlocks(
+    '![ALT](https://pictures.s3.yandex.net/resources/picture.png "Пример стандартного резюме|||aspect=1")'
+  );
+  const payload = shared.buildTheoryBlockPayload(blocks[0], {
+    treeId: "tree-id",
+    rootBlockId: "root-id"
+  });
+
+  assert.equal(payload.content.caption, "Пример стандартного резюме");
+  assert.equal(
+    payload.content.markdown,
+    '![ALT](https://pictures.s3.yandex.net/resources/picture.png "Пример стандартного резюме|||aspect=1")*Пример стандартного резюме*'
+  );
+});

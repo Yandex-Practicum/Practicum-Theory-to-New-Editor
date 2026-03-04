@@ -15,6 +15,7 @@ import {
 } from "./background-task.js";
 
 const RELOAD_TIMEOUT_MS = 15000;
+const THEORY_UPLOAD_BATCH_SIZE = 4;
 const DEBUG_LOG_LIMIT = 25;
 const TASK_STARTING_STALE_TIMEOUT_MS = 15000;
 const TASK_RUNNING_STALE_TIMEOUT_MS = 180000;
@@ -30,6 +31,25 @@ const IMAGE_EXTENSION_TO_MIME = {
 
 function defaultScheduleTask(callback) {
   callback();
+}
+
+async function mapInBatches(items, batchSize, iteratee) {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const normalizedBatchSize = Math.max(1, Number(batchSize) || 1);
+  const results = new Array(normalizedItems.length);
+
+  for (let start = 0; start < normalizedItems.length; start += normalizedBatchSize) {
+    const batch = normalizedItems.slice(start, start + normalizedBatchSize);
+    const batchResults = await Promise.all(
+      batch.map((item, offset) => iteratee(item, start + offset))
+    );
+
+    for (let offset = 0; offset < batchResults.length; offset += 1) {
+      results[start + offset] = batchResults[offset];
+    }
+  }
+
+  return results;
 }
 
 function toErrorMessage(error) {
@@ -995,58 +1015,74 @@ export function createBackgroundController(dependencies) {
 
       if (sourceAssets.length) {
         const uploadedAssetUrls = new Map();
+        await appendTaskDebug(task.id, "Uploading theory resources in batches", {
+          assetCount: sourceAssets.length,
+          batchSize: THEORY_UPLOAD_BATCH_SIZE
+        });
 
-        for (const asset of sourceAssets) {
-          if (await stopIfTaskInterrupted(task.id)) {
-            return;
-          }
+        const uploadResults = await mapInBatches(
+          sourceAssets,
+          THEORY_UPLOAD_BATCH_SIZE,
+          async asset => {
+            const assetBytes = await deps.loadSourceAssetBytes(storedSource.sourceStorageId || "", asset.id);
+            if (!(assetBytes instanceof ArrayBuffer) || !assetBytes.byteLength) {
+              return {
+                assetId: asset.id,
+                success: false,
+                fileUrl: "",
+                reason: "missing-bytes"
+              };
+            }
 
-          await appendTaskDebug(task.id, "Uploading theory resource", {
-            assetId: asset.id,
-            fileName: asset.fileName || ""
-          });
-
-          const assetBytes = await deps.loadSourceAssetBytes(storedSource.sourceStorageId || "", asset.id);
-          if (!(assetBytes instanceof ArrayBuffer) || !assetBytes.byteLength) {
-            skippedImageCount += 1;
-            await appendTaskDebug(task.id, "Source asset bytes missing", {
-              assetId: asset.id
+            const uploadResponse = await deps.sendBridgeMessage({
+              tabId: tab.id,
+              kind: BRIDGE_KINDS.THEORY,
+              message: {
+                type: MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE,
+                fileName: asset.fileName || getPathBaseName(asset.path || asset.id || ""),
+                mimeType: asset.mimeType || getSupportedImageMimeType(asset.path || asset.id || ""),
+                bytesBase64: encodeArrayBufferToBase64(assetBytes),
+                expectedBridgeVersion: EXT_BUILD
+              }
             });
+
+            if (uploadResponse && uploadResponse.success && uploadResponse.fileUrl) {
+              return {
+                assetId: asset.id,
+                success: true,
+                fileUrl: String(uploadResponse.fileUrl),
+                reason: ""
+              };
+            }
+
+            return {
+              assetId: asset.id,
+              success: false,
+              fileUrl: "",
+              reason: "upload-failed"
+            };
+          }
+        );
+
+        for (const uploadResult of uploadResults) {
+          if (!uploadResult) {
+            skippedImageCount += 1;
             continue;
           }
 
-          if (await stopIfTaskInterrupted(task.id)) {
-            return;
-          }
-
-          const uploadResponse = await deps.sendBridgeMessage({
-            tabId: tab.id,
-            kind: BRIDGE_KINDS.THEORY,
-            message: {
-              type: MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE,
-              fileName: asset.fileName || getPathBaseName(asset.path || asset.id || ""),
-              mimeType: asset.mimeType || getSupportedImageMimeType(asset.path || asset.id || ""),
-              bytesBase64: encodeArrayBufferToBase64(assetBytes),
-              expectedBridgeVersion: EXT_BUILD
-            }
-          });
-          if (await stopIfTaskInterrupted(task.id)) {
-            return;
-          }
-
-          await appendTaskDebug(task.id, "Theory resource upload responded", {
-            assetId: asset.id,
-            success: Boolean(uploadResponse && uploadResponse.success)
-          });
-
-          if (uploadResponse && uploadResponse.success && uploadResponse.fileUrl) {
-            uploadedAssetUrls.set(asset.id, String(uploadResponse.fileUrl));
+          if (uploadResult.success && uploadResult.fileUrl) {
+            uploadedAssetUrls.set(uploadResult.assetId, uploadResult.fileUrl);
             uploadedImageCount += 1;
             continue;
           }
 
           skippedImageCount += 1;
         }
+
+        await appendTaskDebug(task.id, "Theory resource uploads finished", {
+          uploadedImageCount,
+          skippedImageCount
+        });
 
         if (uploadedAssetUrls.size) {
           insertMarkdown = rewriteMarkdownImageTargets(

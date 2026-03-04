@@ -9,6 +9,7 @@
     rootBlockId: "",
     treeId: ""
   };
+  const THEORY_BLOCK_CREATE_BATCH_SIZE = 6;
 
   function updateContext(nextValues) {
     if (nextValues.authToken) {
@@ -183,6 +184,32 @@
     }
 
     return { response, payload };
+  }
+
+  async function mapSettledInBatches(items, batchSize, iteratee) {
+    const normalizedItems = Array.isArray(items) ? items : [];
+    const normalizedBatchSize = Math.max(1, Number(batchSize) || 1);
+    const results = new Array(normalizedItems.length);
+
+    for (let start = 0; start < normalizedItems.length; start += normalizedBatchSize) {
+      const batch = normalizedItems.slice(start, start + normalizedBatchSize);
+      const batchResults = await Promise.all(
+        batch.map((item, offset) =>
+          Promise.resolve()
+            .then(() => iteratee(item, start + offset))
+            .then(
+              value => ({ status: "fulfilled", value }),
+              reason => ({ status: "rejected", reason })
+            )
+        )
+      );
+
+      for (let offset = 0; offset < batchResults.length; offset += 1) {
+        results[start + offset] = batchResults[offset];
+      }
+    }
+
+    return results;
   }
 
   async function deleteBlocks(createdIds) {
@@ -399,39 +426,86 @@
 
       const existingNested = shared.extractRootNested(initialTree.payload, context.rootBlockId);
 
-      for (const block of compiledBlocks) {
-        const createResult = await requestJson("/api/theory_blocks/", {
-          method: "POST",
-          headers: createHeaders(true),
-          body: JSON.stringify(
-            shared.buildTheoryBlockPayload(block, {
-              treeId: context.treeId,
-              rootBlockId: context.rootBlockId
-            })
-          )
-        });
+      const blockPayloads = compiledBlocks.map(block =>
+        shared.buildTheoryBlockPayload(block, {
+          treeId: context.treeId,
+          rootBlockId: context.rootBlockId
+        })
+      );
+      const createResults = await mapSettledInBatches(
+        blockPayloads,
+        THEORY_BLOCK_CREATE_BATCH_SIZE,
+        payload =>
+          requestJson("/api/theory_blocks/", {
+            method: "POST",
+            headers: createHeaders(true),
+            body: JSON.stringify(payload)
+          })
+      );
 
-        if (!createResult.response.ok || !createResult.payload) {
-          await deleteBlocks(createdIds);
-          respond(requestId, {
-            success: false,
-            error: "Не удалось создать один из theory blocks. Откат выполнен."
-          });
-          return;
+      const stagedCreatedIds = [];
+      const orderedCreatedIds = new Array(blockPayloads.length);
+      let authFailure = false;
+      let missingIdFailure = false;
+      let createFailure = false;
+
+      for (let index = 0; index < createResults.length; index += 1) {
+        const createResult = createResults[index];
+        if (!createResult || createResult.status !== "fulfilled") {
+          createFailure = true;
+          continue;
         }
 
-        const createdId = shared.extractCreatedBlockId(createResult.payload);
+        const resolved = createResult.value;
+        if (shared.isAuthFailure(resolved.response.status)) {
+          authFailure = true;
+          continue;
+        }
+
+        if (!resolved.response.ok || !resolved.payload) {
+          createFailure = true;
+          continue;
+        }
+
+        const createdId = shared.extractCreatedBlockId(resolved.payload);
         if (!createdId) {
-          await deleteBlocks(createdIds);
-          respond(requestId, {
-            success: false,
-            error: "API не вернул id созданного блока. Откат выполнен."
-          });
-          return;
+          missingIdFailure = true;
+          continue;
         }
 
-        createdIds.push(createdId);
+        orderedCreatedIds[index] = createdId;
+        stagedCreatedIds.push(createdId);
       }
+
+      if (authFailure) {
+        context.authToken = "";
+        await deleteBlocks(stagedCreatedIds);
+        respond(requestId, {
+          success: false,
+          error: "Авторизация Praktikum истекла. Обновите страницу и попробуйте снова."
+        });
+        return;
+      }
+
+      if (createFailure) {
+        await deleteBlocks(stagedCreatedIds);
+        respond(requestId, {
+          success: false,
+          error: "Не удалось создать один из theory blocks. Откат выполнен."
+        });
+        return;
+      }
+
+      if (missingIdFailure) {
+        await deleteBlocks(stagedCreatedIds);
+        respond(requestId, {
+          success: false,
+          error: "API не вернул id созданного блока. Откат выполнен."
+        });
+        return;
+      }
+
+      createdIds.push(...orderedCreatedIds);
 
       const patchResult = await requestJson(`/api/theory_blocks/${context.rootBlockId}/`, {
         method: "PATCH",

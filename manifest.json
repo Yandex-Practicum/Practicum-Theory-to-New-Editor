@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "practicum helper source copier",
-  "version": "3.4.1",
+  "version": "3.4.4",
   "description": "Render-aware copier from Yonote to Praktikum theory",
   "icons": {
     "16": "icon16.png"

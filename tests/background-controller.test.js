@@ -54,7 +54,7 @@ function createHarness(overrides = {}) {
       overrides.sendBridgeMessage ||
       (async () => ({
         success: true,
-        bridgeVersion: "3.4.1-background-worker",
+        bridgeVersion: "3.4.4-background-worker",
         nativeExportContext: {
           title: "Doc title",
           sourceUrl: "https://practicum.yonote.ru/doc/test-doc",
@@ -134,7 +134,7 @@ test("copy flow uses native-export context and saves payload from the background
       preferredMode = message.preferredMode;
       return {
         success: true,
-        bridgeVersion: "3.4.1-background-worker",
+        bridgeVersion: "3.4.4-background-worker",
         diagnostics: {
           renderApiPath: "/api/documents.export"
         },
@@ -446,6 +446,91 @@ test("insert flow uploads stored images and rewrites markdown before append", as
   assert.equal(state.task.result.skippedImageCount, 0);
   assert.equal(state.clearedSourceAssets, 1);
   assert.equal(state.source.assetCount, 0);
+});
+
+test("insert flow starts multiple image uploads before waiting for responses", async () => {
+  const uploadResolvers = new Map();
+  const startedUploads = [];
+  let appendRequests = 0;
+
+  const { controller, state } = createHarness({
+    initialSource: {
+      markdown: "![A](assets/a.png)\n\n![B](assets/b.png)",
+      sourceStorageId: "source-1",
+      assetBasePath: "",
+      assets: [
+        {
+          id: "assets/a.png",
+          path: "assets/a.png",
+          fileName: "a.png",
+          mimeType: "image/png",
+          byteLength: 1
+        },
+        {
+          id: "assets/b.png",
+          path: "assets/b.png",
+          fileName: "b.png",
+          mimeType: "image/png",
+          byteLength: 1
+        }
+      ]
+    },
+    initialSourceAssets: new Map([
+      ["source-1:assets/a.png", new Uint8Array([1]).buffer],
+      ["source-1:assets/b.png", new Uint8Array([2]).buffer]
+    ]),
+    getActiveTab: async () => ({
+      id: 77,
+      url: "https://admin.praktikum.yandex-team.ru/course/lesson/theory/"
+    }),
+    sendBridgeMessage: ({ message }) => {
+      if (message.type === MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE) {
+        startedUploads.push(message.fileName);
+        return new Promise(resolve => {
+          uploadResolvers.set(message.fileName, resolve);
+        });
+      }
+
+      if (message.type === MESSAGE_TYPES.APPEND_TEXT_BLOCKS) {
+        appendRequests += 1;
+        return Promise.resolve({
+          success: true,
+          appendedCount: 2,
+          tableCount: 0,
+          imageCount: 2
+        });
+      }
+
+      throw new Error(`Unexpected message type: ${message.type}`);
+    }
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_INSERT_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.deepEqual(startedUploads, ["a.png", "b.png"]);
+  assert.equal(appendRequests, 0);
+
+  uploadResolvers.get("a.png")({
+    success: true,
+    fileUrl: "https://pictures.s3.yandex.net/resources/a.png"
+  });
+  for (let step = 0; step < 40; step += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(appendRequests, 0);
+
+  uploadResolvers.get("b.png")({
+    success: true,
+    fileUrl: "https://pictures.s3.yandex.net/resources/b.png"
+  });
+  for (let step = 0; step < 80; step += 1) {
+    await Promise.resolve();
+  }
+
+  assert.equal(appendRequests, 1);
 });
 
 test("insert flow preserves markdown image title metadata when rewriting uploaded urls", async () => {
