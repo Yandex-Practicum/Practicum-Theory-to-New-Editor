@@ -1,6 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "practicum helper source copier",
+  "name": "Practicum Theory to New Editor",
+  "short_name": "Practicum Theory to New Editor",
   "version": "3.5.3",
   "description": "Render-aware copier from Yonote and Wiki to Praktikum theory",
   "icons": {
