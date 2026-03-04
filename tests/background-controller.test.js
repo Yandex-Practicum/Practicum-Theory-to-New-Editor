@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createBackgroundController } from "../shared/background-controller.js";
-import { BACKGROUND_MESSAGE_TYPES, MESSAGE_TYPES } from "../shared/constants.js";
+import { BACKGROUND_MESSAGE_TYPES, BRIDGE_KINDS, EXT_BUILD, MESSAGE_TYPES } from "../shared/constants.js";
 
 function createHarness(overrides = {}) {
   const state = {
@@ -49,12 +49,13 @@ function createHarness(overrides = {}) {
         state.clearedSourceAssets += 1;
         state.sourceAssets.clear();
       }),
+    fetchSourceAssetBytes: overrides.fetchSourceAssetBytes,
     getActiveTab: overrides.getActiveTab || (async () => ({ id: 12, url: "https://practicum.yonote.ru/doc/test-doc" })),
     sendBridgeMessage:
       overrides.sendBridgeMessage ||
       (async () => ({
         success: true,
-        bridgeVersion: "3.4.4-background-worker",
+        bridgeVersion: EXT_BUILD,
         nativeExportContext: {
           title: "Doc title",
           sourceUrl: "https://practicum.yonote.ru/doc/test-doc",
@@ -134,7 +135,7 @@ test("copy flow uses native-export context and saves payload from the background
       preferredMode = message.preferredMode;
       return {
         success: true,
-        bridgeVersion: "3.4.4-background-worker",
+        bridgeVersion: EXT_BUILD,
         diagnostics: {
           renderApiPath: "/api/documents.export"
         },
@@ -249,6 +250,134 @@ test("copy flow humanizes message-channel-closed bridge errors", async () => {
   assert.equal(state.task.message, "Страница была закрыта или перезагружена до ответа. Повторите действие.");
 });
 
+test("wiki copy flow uses immediate payload, skips native export, and stores only fetched assets", async () => {
+  let receivedKind = "";
+  let receivedType = "";
+  let nativeExportCalls = 0;
+  const wikiAssetUrlA = "https://wiki.yandex-team.ru/.files/diagram-a.png";
+  const wikiAssetUrlB = "https://wiki.yandex-team.ru/.files/diagram-b.png";
+
+  const { controller, state } = createHarness({
+    getActiveTab: async () => ({
+      id: 44,
+      url: "https://wiki.yandex-team.ru/tools/practicum-helper/"
+    }),
+    sendBridgeMessage: async ({ kind, message }) => {
+      receivedKind = kind;
+      receivedType = message.type;
+
+      return {
+        success: true,
+        bridgeVersion: EXT_BUILD,
+        payload: {
+          title: "Wiki title",
+          markdown: "# Wiki title\n\nText\n\n![A](https://wiki.yandex-team.ru/.files/diagram-a.png)",
+          sourceUrl: "https://wiki.yandex-team.ru/tools/practicum-helper/",
+          sourceMode: "Wiki rendered DOM",
+          assets: [
+            {
+              id: wikiAssetUrlA,
+              path: wikiAssetUrlA,
+              fileName: "diagram-a.png",
+              mimeType: "image/png",
+              byteLength: 0
+            },
+            {
+              id: wikiAssetUrlB,
+              path: wikiAssetUrlB,
+              fileName: "diagram-b.png",
+              mimeType: "image/png",
+              byteLength: 0
+            }
+          ],
+          assetBasePath: "",
+          assetCount: 2
+        }
+      };
+    },
+    fetchSourceAssetBytes: async asset => {
+      if (asset.id !== wikiAssetUrlA) {
+        return null;
+      }
+
+      const bytes = new Uint8Array([1, 2, 3]).buffer;
+      return {
+        bytes,
+        mimeType: "image/png",
+        byteLength: bytes.byteLength
+      };
+    },
+    requestNativeExport: async () => {
+      nativeExportCalls += 1;
+      return {
+        markdown: "unused"
+      };
+    }
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_COPY_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.equal(receivedKind, BRIDGE_KINDS.WIKI);
+  assert.equal(receivedType, MESSAGE_TYPES.COPY_FROM_WIKI);
+  assert.equal(nativeExportCalls, 0);
+  assert.equal(state.task.stage, "success");
+  assert.equal(state.source.provider, "wiki");
+  assert.equal(state.source.assetCount, 1);
+  assert.equal(state.source.assets[0].id, wikiAssetUrlA);
+  assert.ok(state.source.sourceStorageId);
+  assert.equal(state.savedAssetWrites.length, 1);
+  assert.equal(state.savedAssetWrites[0].assets.length, 1);
+});
+
+test("wiki copy flow stays successful and clears stale assets when background fetch fails for all images", async () => {
+  const wikiAssetUrl = "https://wiki.yandex-team.ru/.files/missing.png";
+
+  const { controller, state } = createHarness({
+    getActiveTab: async () => ({
+      id: 45,
+      url: "https://wiki.yandex-team.ru/tools/practicum-helper/"
+    }),
+    sendBridgeMessage: async () => ({
+      success: true,
+      bridgeVersion: EXT_BUILD,
+      payload: {
+        title: "Wiki title",
+        markdown: "# Wiki title\n\n![ALT](https://wiki.yandex-team.ru/.files/missing.png)",
+        sourceUrl: "https://wiki.yandex-team.ru/tools/practicum-helper/",
+        sourceMode: "Wiki rendered DOM",
+        assets: [
+          {
+            id: wikiAssetUrl,
+            path: wikiAssetUrl,
+            fileName: "missing.png",
+            mimeType: "image/png",
+            byteLength: 0
+          }
+        ],
+        assetBasePath: "",
+        assetCount: 1
+      }
+    }),
+    fetchSourceAssetBytes: async () => null
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_COPY_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.equal(state.task.stage, "success");
+  assert.equal(state.source.provider, "wiki");
+  assert.equal(state.source.assetCount, 0);
+  assert.deepEqual(state.source.assets, []);
+  assert.equal(state.source.sourceStorageId, "");
+  assert.equal(state.savedAssetWrites.length, 0);
+  assert.equal(state.clearedSourceAssets, 1);
+});
+
 test("a second task is rejected while one background task is active", async () => {
   const { controller } = createHarness();
 
@@ -307,7 +436,7 @@ test("GET_ACTIVE_TASK recovers stale starting task but keeps a recent running ta
     id: "stale-starting",
     kind: "copy_source",
     stage: "starting",
-    message: "Собираю source в фоне...",
+    message: "Считываю контент источника...",
     startedAt: "2026-03-03T10:00:00.000Z",
     updatedAt: "2026-03-03T10:00:00.000Z"
   };
@@ -587,6 +716,99 @@ test("insert flow preserves markdown image title metadata when rewriting uploade
   assert.equal(
     appendMarkdown,
     '![ALT](https://pictures.s3.yandex.net/resources/picture_1.png "Пример стандартного резюме|||aspect=1")'
+  );
+});
+
+test("insert flow rewrites absolute wiki image urls after upload", async () => {
+  let appendMarkdown = "";
+  const wikiAssetUrl = "https://wiki.yandex-team.ru/.files/inline-diagram.png";
+
+  const { controller, state } = createHarness({
+    initialSource: {
+      markdown: `![ALT](${wikiAssetUrl})`,
+      sourceStorageId: "source-1",
+      assetBasePath: "",
+      assets: [
+        {
+          id: wikiAssetUrl,
+          path: wikiAssetUrl,
+          fileName: "inline-diagram.png",
+          mimeType: "image/png",
+          byteLength: 3
+        }
+      ]
+    },
+    initialSourceAssets: new Map([["source-1:https://wiki.yandex-team.ru/.files/inline-diagram.png", new Uint8Array([1, 2, 3]).buffer]]),
+    getActiveTab: async () => ({
+      id: 77,
+      url: "https://admin.praktikum.yandex-team.ru/course/lesson/theory/"
+    }),
+    sendBridgeMessage: async ({ message }) => {
+      if (message.type === MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE) {
+        assert.equal(message.fileName, "inline-diagram.png");
+        return {
+          success: true,
+          fileUrl: "https://pictures.s3.yandex.net/resources/wiki-image.png"
+        };
+      }
+
+      if (message.type === MESSAGE_TYPES.APPEND_TEXT_BLOCKS) {
+        appendMarkdown = message.markdown;
+        return {
+          success: true,
+          appendedCount: 1,
+          tableCount: 0,
+          imageCount: 1
+        };
+      }
+
+      throw new Error(`Unexpected message type: ${message.type}`);
+    }
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_INSERT_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.equal(appendMarkdown, "![ALT](https://pictures.s3.yandex.net/resources/wiki-image.png)");
+});
+
+test("insert flow escapes snake_case in plain text without touching markdown syntax", async () => {
+  let appendMarkdown = "";
+
+  const { controller, state } = createHarness({
+    initialSource: {
+      markdown:
+        'Идентификаторы online_store и tools_shop.\n\n`public.table_name`\n\n[Гайд](https://example.com/online_store)\n\n![ALT](https://cdn.example.com/tools_shop.png)'
+    },
+    getActiveTab: async () => ({
+      id: 77,
+      url: "https://admin.praktikum.yandex-team.ru/course/lesson/theory/"
+    }),
+    sendBridgeMessage: async ({ message }) => {
+      if (message.type === MESSAGE_TYPES.APPEND_TEXT_BLOCKS) {
+        appendMarkdown = message.markdown;
+        return {
+          success: true,
+          appendedCount: 1,
+          tableCount: 0,
+          imageCount: 0
+        };
+      }
+
+      throw new Error(`Unexpected message type: ${message.type}`);
+    }
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_INSERT_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.equal(
+    appendMarkdown,
+    'Идентификаторы online\\_store и tools\\_shop.\n\n`public.table_name`\n\n[Гайд](https://example.com/online_store)\n\n![ALT](https://cdn.example.com/tools_shop.png)'
   );
 });
 

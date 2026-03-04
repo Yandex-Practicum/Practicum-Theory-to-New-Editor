@@ -13,6 +13,12 @@ async function injectBridgeFiles(tabId, kind) {
     return;
   }
 
+  if (kind === BRIDGE_KINDS.WIKI) {
+    await executeFilesInTab(tabId, ["bridges/common.js", "bridges/wiki-main.js"], "MAIN");
+    await executeFilesInTab(tabId, ["bridges/common.js", "bridges/wiki-relay.js"], "ISOLATED");
+    return;
+  }
+
   if (kind === BRIDGE_KINDS.THEORY) {
     await executeFilesInTab(tabId, ["bridges/common.js", "bridges/theory-main.js"], "MAIN");
     await executeFilesInTab(tabId, ["bridges/common.js", "bridges/theory-relay.js"], "ISOLATED");
@@ -32,6 +38,35 @@ async function sendBridgeMessage({ tabId, kind, message }) {
   });
 }
 
+async function fetchSourceAssetBytes(asset) {
+  const assetUrl = String((asset && (asset.path || asset.id)) || "").trim();
+  if (!assetUrl) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(assetUrl, {
+      credentials: "include"
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const bytes = await response.arrayBuffer();
+    const mimeType = String(response.headers.get("content-type") || "")
+      .split(";")[0]
+      .trim();
+
+    return {
+      bytes,
+      mimeType: mimeType || String((asset && asset.mimeType) || "").trim(),
+      byteLength: Number(bytes.byteLength || 0)
+    };
+  } catch {
+    return null;
+  }
+}
+
 const backgroundController = createBackgroundController({
   loadActiveTask,
   saveActiveTask,
@@ -40,6 +75,7 @@ const backgroundController = createBackgroundController({
   replaceSourceAssets,
   loadSourceAssetBytes,
   clearSourceAssets,
+  fetchSourceAssetBytes,
   getActiveTab,
   sendBridgeMessage,
   requestNativeExport: requestYonoteNativeExport,

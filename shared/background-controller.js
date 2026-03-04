@@ -15,7 +15,8 @@ import {
 } from "./background-task.js";
 
 const RELOAD_TIMEOUT_MS = 15000;
-const THEORY_UPLOAD_BATCH_SIZE = 4;
+const THEORY_UPLOAD_BATCH_SIZE = 6;
+const SOURCE_ASSET_FETCH_BATCH_SIZE = 6;
 const DEBUG_LOG_LIMIT = 25;
 const TASK_STARTING_STALE_TIMEOUT_MS = 15000;
 const TASK_RUNNING_STALE_TIMEOUT_MS = 180000;
@@ -89,6 +90,181 @@ function normalizeHeadingText(text) {
     .toLowerCase();
 }
 
+function isMarkdownIdentifierChar(value) {
+  return /^[0-9A-Za-z\u0400-\u04FF]$/.test(String(value || ""));
+}
+
+function escapeIdentifierUnderscoresInPlainText(value) {
+  const text = String(value || "");
+  let output = "";
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (
+      char === "_" &&
+      isMarkdownIdentifierChar(text[index - 1]) &&
+      isMarkdownIdentifierChar(text[index + 1])
+    ) {
+      output += "\\_";
+      continue;
+    }
+
+    output += char;
+  }
+
+  return output;
+}
+
+function consumeMarkdownFence(text, startIndex) {
+  if (!(startIndex === 0 || text[startIndex - 1] === "\n") || !text.startsWith("```", startIndex)) {
+    return -1;
+  }
+
+  const openingLineEnd = text.indexOf("\n", startIndex);
+  if (openingLineEnd < 0) {
+    return text.length;
+  }
+
+  let cursor = openingLineEnd + 1;
+  while (cursor < text.length) {
+    if ((cursor === 0 || text[cursor - 1] === "\n") && text.startsWith("```", cursor)) {
+      const closingLineEnd = text.indexOf("\n", cursor);
+      return closingLineEnd < 0 ? text.length : closingLineEnd + 1;
+    }
+
+    const nextLineStart = text.indexOf("\n", cursor);
+    if (nextLineStart < 0) {
+      return text.length;
+    }
+    cursor = nextLineStart + 1;
+  }
+
+  return text.length;
+}
+
+function consumeInlineCodeSpan(text, startIndex) {
+  if (text[startIndex] !== "`") {
+    return -1;
+  }
+
+  let tickCount = 1;
+  while (text[startIndex + tickCount] === "`") {
+    tickCount += 1;
+  }
+
+  const delimiter = "`".repeat(tickCount);
+  const closingIndex = text.indexOf(delimiter, startIndex + tickCount);
+  if (closingIndex < 0) {
+    return startIndex + tickCount;
+  }
+
+  return closingIndex + tickCount;
+}
+
+function consumeMarkdownLinkLike(text, startIndex) {
+  const startsImage = text[startIndex] === "!" && text[startIndex + 1] === "[";
+  let cursor = startsImage ? startIndex + 1 : startIndex;
+  if (text[cursor] !== "[") {
+    return -1;
+  }
+
+  let bracketDepth = 0;
+  while (cursor < text.length) {
+    const char = text[cursor];
+    if (char === "\\") {
+      cursor += 2;
+      continue;
+    }
+
+    if (char === "[") {
+      bracketDepth += 1;
+    } else if (char === "]") {
+      bracketDepth -= 1;
+      if (bracketDepth === 0) {
+        cursor += 1;
+        break;
+      }
+    }
+
+    cursor += 1;
+  }
+
+  if (bracketDepth !== 0 || text[cursor] !== "(") {
+    return -1;
+  }
+
+  cursor += 1;
+  let parenDepth = 1;
+  while (cursor < text.length) {
+    const char = text[cursor];
+    if (char === "\\") {
+      cursor += 2;
+      continue;
+    }
+
+    if (char === "(") {
+      parenDepth += 1;
+    } else if (char === ")") {
+      parenDepth -= 1;
+      if (parenDepth === 0) {
+        return cursor + 1;
+      }
+    }
+
+    cursor += 1;
+  }
+
+  return -1;
+}
+
+function normalizeMarkdownForTheoryInsert(markdown) {
+  const text = String(markdown || "");
+  let output = "";
+  let textBuffer = "";
+  let index = 0;
+
+  function flushTextBuffer() {
+    if (!textBuffer) {
+      return;
+    }
+
+    output += escapeIdentifierUnderscoresInPlainText(textBuffer);
+    textBuffer = "";
+  }
+
+  while (index < text.length) {
+    const fenceEnd = consumeMarkdownFence(text, index);
+    if (fenceEnd > index) {
+      flushTextBuffer();
+      output += text.slice(index, fenceEnd);
+      index = fenceEnd;
+      continue;
+    }
+
+    const codeEnd = consumeInlineCodeSpan(text, index);
+    if (codeEnd > index) {
+      flushTextBuffer();
+      output += text.slice(index, codeEnd);
+      index = codeEnd;
+      continue;
+    }
+
+    const linkEnd = consumeMarkdownLinkLike(text, index);
+    if (linkEnd > index) {
+      flushTextBuffer();
+      output += text.slice(index, linkEnd);
+      index = linkEnd;
+      continue;
+    }
+
+    textBuffer += text[index];
+    index += 1;
+  }
+
+  flushTextBuffer();
+  return output;
+}
+
 function ensureLeadingTitleHeading(title, markdown) {
   const normalizedTitle = String(title || "").trim();
   const body = String(markdown || "").replace(/\r\n?/g, "\n").trim();
@@ -147,6 +323,10 @@ function isExternalAssetTarget(target) {
   return /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(String(target || "").trim());
 }
 
+function isAbsoluteHttpUrl(target) {
+  return /^https?:\/\//i.test(String(target || "").trim());
+}
+
 function normalizePathSlashes(path) {
   return String(path || "").replace(/\\/g, "/");
 }
@@ -186,8 +366,12 @@ function getSupportedImageMimeType(path) {
 
 function resolveAssetPath(target, baseDir) {
   const rawTarget = parseMarkdownImageLinkTarget(target).path;
-  if (!rawTarget || isExternalAssetTarget(rawTarget)) {
+  if (!rawTarget) {
     return "";
+  }
+
+  if (isExternalAssetTarget(rawTarget)) {
+    return isAbsoluteHttpUrl(rawTarget) ? rawTarget : "";
   }
 
   let decodedTarget = rawTarget;
@@ -392,11 +576,26 @@ function clearStoredSourceAssetsMetadata(storedSource) {
   };
 }
 
+function normalizePayloadAssetMetadata(payload) {
+  const assets = Array.isArray(payload && payload.assets) ? payload.assets : [];
+  const assetBasePath = payload && typeof payload.assetBasePath === "string" ? payload.assetBasePath : "";
+  const assetCount =
+    payload && Number.isFinite(Number(payload.assetCount)) ? Number(payload.assetCount) : assets.length;
+
+  return {
+    assetBasePath,
+    assets,
+    assetCount
+  };
+}
+
 function buildCopyPayload(response, provider, fallbackCapturedAt) {
   const payload = response && response.payload ? response.payload : null;
   if (!payload || !payload.markdown) {
     throw new Error(response && response.error ? response.error : "Не удалось получить markdown из источника.");
   }
+
+  const assetMetadata = normalizePayloadAssetMetadata(payload);
 
   return {
     ...payload,
@@ -406,9 +605,9 @@ function buildCopyPayload(response, provider, fallbackCapturedAt) {
     capturedAt: payload.capturedAt || normalizeDate(fallbackCapturedAt).toISOString(),
     diagnostics: payload.diagnostics || response.diagnostics || {},
     sourceStorageId: "",
-    assetBasePath: "",
-    assets: [],
-    assetCount: 0
+    assetBasePath: assetMetadata.assetBasePath,
+    assets: assetMetadata.assets,
+    assetCount: assetMetadata.assetCount
   };
 }
 
@@ -473,6 +672,7 @@ export function createBackgroundController(dependencies) {
     replaceSourceAssets: dependencies.replaceSourceAssets || (async () => {}),
     loadSourceAssetBytes: dependencies.loadSourceAssetBytes || (async () => null),
     clearSourceAssets: dependencies.clearSourceAssets || (async () => {}),
+    fetchSourceAssetBytes: dependencies.fetchSourceAssetBytes || (async () => null),
     getActiveTab: dependencies.getActiveTab,
     sendBridgeMessage: dependencies.sendBridgeMessage,
     requestNativeExport: dependencies.requestNativeExport || null,
@@ -838,6 +1038,188 @@ export function createBackgroundController(dependencies) {
     };
   }
 
+  async function clearStaleSourceAssets(taskId) {
+    try {
+      await deps.clearSourceAssets();
+    } catch (error) {
+      await appendTaskDebug(taskId, "Failed to clear stale source assets", {
+        message: error instanceof Error ? error.message : String(error || "")
+      });
+    }
+  }
+
+  async function persistBridgePayloadAssets(taskId, payload) {
+    const sourceAssets = Array.isArray(payload && payload.assets) ? payload.assets : [];
+    if (!sourceAssets.length) {
+      await clearStaleSourceAssets(taskId);
+      return clearStoredSourceAssetsMetadata(payload);
+    }
+
+    await replaceCurrentTask(taskId, {
+      message: "Сохраняю картинки источника в фоне..."
+    });
+    await appendTaskDebug(taskId, "Attempting background source asset fetch", {
+      assetCount: sourceAssets.length,
+      batchSize: SOURCE_ASSET_FETCH_BATCH_SIZE
+    });
+
+    const fetchedAssets = await mapInBatches(sourceAssets, SOURCE_ASSET_FETCH_BATCH_SIZE, async asset => {
+      const result = await deps.fetchSourceAssetBytes(asset);
+      if (!result || !(result.bytes instanceof ArrayBuffer) || !result.bytes.byteLength) {
+        return null;
+      }
+
+      return {
+        ref: {
+          ...asset,
+          mimeType: result.mimeType || asset.mimeType || "",
+          byteLength: Number(result.byteLength || result.bytes.byteLength || 0)
+        },
+        binary: {
+          id: asset.id,
+          bytes: toDetachedArrayBuffer(result.bytes)
+        }
+      };
+    });
+
+    const successful = fetchedAssets.filter(Boolean);
+    const successfulAssetRefs = successful.map(item => item.ref);
+    const successfulAssetBinaries = successful.map(item => item.binary);
+    const skippedAssetCount = Math.max(0, sourceAssets.length - successful.length);
+    await appendTaskDebug(taskId, "Background source asset fetch finished", {
+      discoveredAssetCount: sourceAssets.length,
+      savedAssetCount: successful.length,
+      skippedAssetCount
+    });
+
+    if (!successfulAssetBinaries.length) {
+      await clearStaleSourceAssets(taskId);
+      return clearStoredSourceAssetsMetadata(payload);
+    }
+
+    await deps.replaceSourceAssets(taskId, successfulAssetBinaries);
+    return {
+      ...payload,
+      sourceStorageId: String(taskId || ""),
+      assetBasePath: String(payload && payload.assetBasePath ? payload.assetBasePath : ""),
+      assets: successfulAssetRefs,
+      assetCount: successfulAssetRefs.length
+    };
+  }
+
+  async function runYonoteCopyTask(task, tab, provider) {
+    await replaceCurrentTask(task.id, {
+      stage: BACKGROUND_TASK_STAGES.RUNNING,
+      message: "Запрашиваю export-контекст у Yonote..."
+    });
+    await appendTaskDebug(task.id, "Requesting native export context from Yonote bridge");
+
+    const response = await deps.sendBridgeMessage({
+      tabId: tab.id,
+      kind: provider.bridgeKind || BRIDGE_KINDS.YONOTE,
+      message: {
+        type: provider.copyMessageType,
+        preferredMode: "native-export-context",
+        expectedBridgeVersion: EXT_BUILD
+      }
+    });
+    releaseKeepAlive(task.id);
+    if (await stopIfTaskInterrupted(task.id)) {
+      return null;
+    }
+    await appendTaskDebug(task.id, "Yonote bridge responded", {
+      success: Boolean(response && response.success),
+      hasPayload: Boolean(response && response.payload && response.payload.markdown),
+      hasNativeExportContext: Boolean(response && response.nativeExportContext)
+    });
+    await appendTaskDebug(task.id, "Copy source tab is no longer required");
+
+    if (!response || !response.success) {
+      throw new Error(response && response.error ? response.error : "Не удалось получить markdown из источника.");
+    }
+
+    if (response.payload && response.payload.markdown) {
+      return persistBridgePayloadAssets(task.id, buildCopyPayload(response, provider, deps.now()));
+    }
+
+    if (!response.nativeExportContext) {
+      throw new Error(response.error || "Не удалось получить контекст native export.");
+    }
+
+    if (typeof deps.requestNativeExport !== "function") {
+      throw new Error("Native export runner не настроен.");
+    }
+
+    await replaceCurrentTask(task.id, {
+      message: "Скачиваю native export из Yonote..."
+    });
+    await appendTaskDebug(task.id, "Starting background native export request", {
+      operationId: response.nativeExportContext.operationId || "",
+      documentId: response.nativeExportContext.documentId || ""
+    });
+    const nativeExportResult = await deps.requestNativeExport({
+      ...response.nativeExportContext,
+      signal: createTaskAbortSignal(task.id)
+    });
+    clearTaskAbortController(task.id);
+    if (await stopIfTaskInterrupted(task.id)) {
+      return null;
+    }
+    await appendTaskDebug(task.id, "Background native export finished", {
+      markdownLength: String((nativeExportResult && nativeExportResult.markdown) || "").length
+    });
+    const assetBundle = extractReferencedImageAssets(
+      nativeExportResult && nativeExportResult.markdown ? nativeExportResult.markdown : "",
+      nativeExportResult && Array.isArray(nativeExportResult.entries) ? nativeExportResult.entries : []
+    );
+    await appendTaskDebug(task.id, "Extracted referenced image assets", {
+      assetCount: assetBundle.assetRefs.length
+    });
+    if (await stopIfTaskInterrupted(task.id)) {
+      return null;
+    }
+    if (assetBundle.assetBinaries.length) {
+      await deps.replaceSourceAssets(task.id, assetBundle.assetBinaries);
+    } else {
+      await clearStaleSourceAssets(task.id);
+    }
+    return buildCopyPayloadFromNativeExport(
+      nativeExportResult,
+      response.nativeExportContext,
+      response,
+      provider,
+      deps.now(),
+      task.id,
+      assetBundle
+    );
+  }
+
+  async function runWikiCopyTask(task, tab, provider) {
+    const response = await deps.sendBridgeMessage({
+      tabId: tab.id,
+      kind: provider.bridgeKind || BRIDGE_KINDS.WIKI,
+      message: {
+        type: provider.copyMessageType,
+        expectedBridgeVersion: EXT_BUILD
+      }
+    });
+    releaseKeepAlive(task.id);
+    if (await stopIfTaskInterrupted(task.id)) {
+      return null;
+    }
+    await appendTaskDebug(task.id, "Wiki bridge responded", {
+      success: Boolean(response && response.success),
+      hasPayload: Boolean(response && response.payload && response.payload.markdown)
+    });
+    await appendTaskDebug(task.id, "Copy source tab is no longer required");
+
+    if (!response || !response.success) {
+      throw new Error(response && response.error ? response.error : "Не удалось получить markdown из источника.");
+    }
+
+    return persistBridgePayloadAssets(task.id, buildCopyPayload(response, provider, deps.now()));
+  }
+
   async function runCopyTask(task, tab, provider) {
     try {
       if (await stopIfTaskInterrupted(task.id)) {
@@ -848,116 +1230,30 @@ export function createBackgroundController(dependencies) {
         task.id,
         tab.id,
         BACKGROUND_TASK_KINDS.COPY_SOURCE,
-        "Вкладка Yonote была закрыта или перезагружена. Копирование остановлено."
+        "Вкладка источника была закрыта или перезагружена. Копирование остановлено."
       );
       if (await stopIfTaskInterrupted(task.id)) {
         return;
       }
       await appendTaskDebug(task.id, "Copy task started", {
         tabId: tab.id,
-        tabUrl: tab.url
+        tabUrl: tab.url,
+        provider: provider.id
       });
       await replaceCurrentTask(task.id, {
         stage: BACKGROUND_TASK_STAGES.RUNNING,
-        message: "Запрашиваю export-контекст у Yonote..."
+        message: "Считываю контент источника..."
       });
-      await appendTaskDebug(task.id, "Requesting native export context from Yonote bridge");
 
-      const response = await deps.sendBridgeMessage({
-        tabId: tab.id,
-        kind: BRIDGE_KINDS.YONOTE,
-        message: {
-          type: provider.copyMessageType,
-          preferredMode: "native-export-context",
-          expectedBridgeVersion: EXT_BUILD
-        }
-      });
-      releaseKeepAlive(task.id);
-      if (await stopIfTaskInterrupted(task.id)) {
+      const payload =
+        provider && provider.id === "wiki"
+          ? await runWikiCopyTask(task, tab, provider)
+          : await runYonoteCopyTask(task, tab, provider);
+
+      if (!payload || (await stopIfTaskInterrupted(task.id))) {
         return;
       }
-      await appendTaskDebug(task.id, "Yonote bridge responded", {
-        success: Boolean(response && response.success),
-        hasPayload: Boolean(response && response.payload && response.payload.markdown),
-        hasNativeExportContext: Boolean(response && response.nativeExportContext)
-      });
-      await appendTaskDebug(task.id, "Copy source tab is no longer required");
 
-      if (!response || !response.success) {
-        throw new Error(response && response.error ? response.error : "Не удалось получить markdown из источника.");
-      }
-
-      let payload = null;
-
-      if (response.payload && response.payload.markdown) {
-        try {
-          await deps.clearSourceAssets();
-        } catch (error) {
-          await appendTaskDebug(task.id, "Failed to clear stale source assets", {
-            message: error instanceof Error ? error.message : String(error || "")
-          });
-        }
-        payload = buildCopyPayload(response, provider, deps.now());
-      } else if (response.nativeExportContext) {
-        if (typeof deps.requestNativeExport !== "function") {
-          throw new Error("Native export runner не настроен.");
-        }
-
-        await replaceCurrentTask(task.id, {
-          message: "Скачиваю native export из Yonote..."
-        });
-        await appendTaskDebug(task.id, "Starting background native export request", {
-          operationId: response.nativeExportContext.operationId || "",
-          documentId: response.nativeExportContext.documentId || ""
-        });
-        const nativeExportResult = await deps.requestNativeExport({
-          ...response.nativeExportContext,
-          signal: createTaskAbortSignal(task.id)
-        });
-        clearTaskAbortController(task.id);
-        if (await stopIfTaskInterrupted(task.id)) {
-          return;
-        }
-        await appendTaskDebug(task.id, "Background native export finished", {
-          markdownLength: String((nativeExportResult && nativeExportResult.markdown) || "").length
-        });
-        const assetBundle = extractReferencedImageAssets(
-          nativeExportResult && nativeExportResult.markdown ? nativeExportResult.markdown : "",
-          nativeExportResult && Array.isArray(nativeExportResult.entries) ? nativeExportResult.entries : []
-        );
-        await appendTaskDebug(task.id, "Extracted referenced image assets", {
-          assetCount: assetBundle.assetRefs.length
-        });
-        if (await stopIfTaskInterrupted(task.id)) {
-          return;
-        }
-        if (assetBundle.assetBinaries.length) {
-          await deps.replaceSourceAssets(task.id, assetBundle.assetBinaries);
-        } else {
-          try {
-            await deps.clearSourceAssets();
-          } catch (error) {
-            await appendTaskDebug(task.id, "Failed to clear stale source assets", {
-              message: error instanceof Error ? error.message : String(error || "")
-            });
-          }
-        }
-        payload = buildCopyPayloadFromNativeExport(
-          nativeExportResult,
-          response.nativeExportContext,
-          response,
-          provider,
-          deps.now(),
-          task.id,
-          assetBundle
-        );
-      } else {
-        throw new Error(response.error || "Не удалось получить контекст native export.");
-      }
-
-      if (await stopIfTaskInterrupted(task.id)) {
-        return;
-      }
       await appendTaskDebug(task.id, "Saving copied source", {
         markdownLength: String(payload.markdown || "").length
       });
@@ -1096,6 +1392,8 @@ export function createBackgroundController(dependencies) {
         }
       }
 
+      insertMarkdown = normalizeMarkdownForTheoryInsert(insertMarkdown);
+
       if (await stopIfTaskInterrupted(task.id)) {
         return;
       }
@@ -1215,7 +1513,7 @@ export function createBackgroundController(dependencies) {
     if (!provider) {
       return {
         accepted: false,
-        error: "Источник не поддерживается. Сейчас доступен только Yonote /doc/..."
+        error: "Источник не поддерживается. Сейчас доступны Yonote /doc/... и wiki.yandex-team.ru."
       };
     }
 
@@ -1223,7 +1521,7 @@ export function createBackgroundController(dependencies) {
       BACKGROUND_TASK_KINDS.COPY_SOURCE,
       {
         stage: BACKGROUND_TASK_STAGES.STARTING,
-        message: "Собираю source в фоне...",
+        message: "Считываю контент источника...",
         sourceTabId: tab.id,
         debugLog: []
       },

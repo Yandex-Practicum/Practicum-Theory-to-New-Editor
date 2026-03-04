@@ -1,5 +1,5 @@
 (function initPracticumHelperBridgeShared() {
-  const BRIDGE_BUILD = "3.4.4-background-worker";
+  const BRIDGE_BUILD = "3.5.0-background-worker-r3";
   const existingShared = globalThis.PracticumHelperBridgeShared;
   if (existingShared && existingShared.bridgeVersion === BRIDGE_BUILD) {
     return;
@@ -11,6 +11,7 @@
 
   const MESSAGE_TYPES = {
     COPY_FROM_YONOTE: scopeBridgeName("PH_COPY_FROM_YONOTE"),
+    COPY_FROM_WIKI: scopeBridgeName("PH_COPY_FROM_WIKI"),
     APPEND_TEXT_BLOCKS: scopeBridgeName("PH_APPEND_TEXT_BLOCKS"),
     UPLOAD_THEORY_RESOURCE: scopeBridgeName("PH_UPLOAD_THEORY_RESOURCE")
   };
@@ -18,6 +19,8 @@
   const EVENT_TYPES = {
     YONOTE_COPY_REQUEST: scopeBridgeName("PH_YONOTE_COPY_REQUEST"),
     YONOTE_COPY_RESPONSE: scopeBridgeName("PH_YONOTE_COPY_RESPONSE"),
+    WIKI_COPY_REQUEST: scopeBridgeName("PH_WIKI_COPY_REQUEST"),
+    WIKI_COPY_RESPONSE: scopeBridgeName("PH_WIKI_COPY_RESPONSE"),
     THEORY_APPEND_REQUEST: scopeBridgeName("PH_THEORY_APPEND_REQUEST"),
     THEORY_APPEND_RESPONSE: scopeBridgeName("PH_THEORY_APPEND_RESPONSE"),
     THEORY_UPLOAD_RESOURCE_REQUEST: scopeBridgeName("PH_THEORY_UPLOAD_RESOURCE_REQUEST"),
@@ -151,6 +154,14 @@
       .replace(/\s*\n\s*/g, " ")
       .replace(/\s{2,}/g, " ")
       .trim();
+  }
+
+  function escapeMarkdownPlainText(value) {
+    return String(value || "").replace(/_/g, "\\_");
+  }
+
+  function unescapeMarkdownPlainText(value) {
+    return String(value || "").replace(/\\_/g, "_");
   }
 
   function normalizeBlockText(value) {
@@ -676,7 +687,7 @@
 
   function collectTextWithLineBreaks(node) {
     if (isTextNode(node)) {
-      return node.textContent || "";
+      return escapeMarkdownPlainText(node.textContent || "");
     }
 
     if (!isElementNode(node) || !isVisibleElement(node) || isExcludedSubtreeRoot(node)) {
@@ -1357,6 +1368,678 @@
       sourceMode: "Yonote native export",
       blockCount: compileTheoryBlocks(markdown).length,
       diagnostics
+    };
+  }
+
+  function matchesWikiUiTerm(value) {
+    const normalized = String(value || "").toLowerCase();
+    return [
+      "avatar",
+      "userpic",
+      "sidebar",
+      "toolbar",
+      "control",
+      "resource",
+      "breadcrumbs",
+      "breadcrumb",
+      "button",
+      "icon"
+    ].some(term => normalized.includes(term));
+  }
+
+  function hasWikiUiAttribute(element) {
+    if (!isElementNode(element)) {
+      return false;
+    }
+
+    if (matchesWikiUiTerm(element.id) || matchesWikiUiTerm(element.className)) {
+      return true;
+    }
+
+    return Array.from(element.attributes || []).some(attribute => {
+      return attribute.name.startsWith("data-") && matchesWikiUiTerm(attribute.value);
+    });
+  }
+
+  function isWikiExcludedSubtreeRoot(element) {
+    const tagName = getTagName(element);
+    if (!tagName) {
+      return false;
+    }
+
+    if (tagName === "ASIDE" || tagName === "NAV") {
+      return true;
+    }
+
+    if (String(element.getAttribute("role") || "").toLowerCase() === "dialog") {
+      return true;
+    }
+
+    if (String(element.getAttribute("aria-modal") || "").toLowerCase() === "true") {
+      return true;
+    }
+
+    return hasWikiUiAttribute(element);
+  }
+
+  function isWikiInlineNoiseElement(element) {
+    if (!isElementNode(element)) {
+      return false;
+    }
+
+    const className = String(element.className || "");
+    return (
+      className.includes("yfm-anchor") ||
+      className.includes("HeadingEditor") ||
+      className.includes("HeadingClipboardButton") ||
+      className.includes("visually-hidden")
+    );
+  }
+
+  function hasMeaningfulWikiContent(element) {
+    if (!isElementNode(element) || !isVisibleElement(element) || isWikiExcludedSubtreeRoot(element)) {
+      return false;
+    }
+
+    if (element.querySelector("h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, hr, img, table")) {
+      return true;
+    }
+
+    return Boolean(normalizeBlockText(element.textContent || ""));
+  }
+
+  function findWikiContentRoot(documentRef) {
+    if (!documentRef) {
+      return null;
+    }
+
+    const mainRoot = documentRef.querySelector("main.WikiPage-Content");
+    if (mainRoot) {
+      const nestedPreferredCandidates = [
+        ...Array.from(mainRoot.querySelectorAll(".PageDoc.PageDoc_type_wysiwyg")),
+        ...Array.from(mainRoot.querySelectorAll(".PageDoc"))
+      ].filter(element => hasMeaningfulWikiContent(element));
+
+      if (nestedPreferredCandidates.length) {
+        return nestedPreferredCandidates[0];
+      }
+
+      if (hasMeaningfulWikiContent(mainRoot)) {
+        return mainRoot;
+      }
+    }
+
+    const candidates = Array.from(documentRef.querySelectorAll(".PageDoc"))
+      .filter(element => hasMeaningfulWikiContent(element))
+      .sort((left, right) => {
+        const leftScore = String(left.className || "").includes("PageDoc_type_wysiwyg") ? 1 : 0;
+        const rightScore = String(right.className || "").includes("PageDoc_type_wysiwyg") ? 1 : 0;
+        return rightScore - leftScore;
+      });
+
+    return candidates[0] || null;
+  }
+
+  function resolveAbsoluteUrl(rawUrl, baseUrl) {
+    const normalized = String(rawUrl || "").trim();
+    if (!normalized) {
+      return "";
+    }
+
+    try {
+      return new URL(normalized, baseUrl).href;
+    } catch {
+      return normalized;
+    }
+  }
+
+  function resolveWikiImageUrl(element) {
+    if (!isElementNode(element)) {
+      return "";
+    }
+
+    const baseUrl =
+      (element.ownerDocument && element.ownerDocument.location && element.ownerDocument.location.href) ||
+      (globalThis.location && globalThis.location.href) ||
+      "https://wiki.yandex-team.ru/";
+    const currentSrc = String(element.currentSrc || "").trim();
+    if (currentSrc) {
+      return resolveAbsoluteUrl(currentSrc, baseUrl);
+    }
+
+    return resolveAbsoluteUrl(element.getAttribute("src") || "", baseUrl);
+  }
+
+  function isWikiMetadataText(text) {
+    return /^(?:обновлено(?=$|[\s:])|updated(?=$|[\s:]))/i.test(String(text || "").trim());
+  }
+
+  function isWikiMetadataElement(element) {
+    if (!isElementNode(element)) {
+      return false;
+    }
+
+    const text = normalizeInlineText(element.textContent || "");
+    if (!text || !isWikiMetadataText(text)) {
+      return false;
+    }
+
+    return !element.querySelector("h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table, img");
+  }
+
+  function isWikiUiImageElement(element, rootBoundary) {
+    if (!isElementNode(element) || getTagName(element) !== "IMG") {
+      return false;
+    }
+
+    const altText = String(element.getAttribute("alt") || "").toLowerCase();
+    if (matchesWikiUiTerm(altText)) {
+      return true;
+    }
+
+    let current = element;
+    while (current && current !== rootBoundary) {
+      if (isWikiExcludedSubtreeRoot(current)) {
+        return true;
+      }
+
+      if (matchesWikiUiTerm(current.className) || matchesWikiUiTerm(current.id)) {
+        return true;
+      }
+
+      if (isWikiMetadataElement(current)) {
+        return true;
+      }
+
+      current = current.parentElement;
+    }
+
+    return false;
+  }
+
+  function buildWikiImageMarkdownFromElement(element) {
+    const imageUrl = resolveWikiImageUrl(element);
+    if (!imageUrl) {
+      return "";
+    }
+
+    return buildImageBlockMarkdown(String(element.getAttribute("alt") || "").trim(), imageUrl, "");
+  }
+
+  function wrapWikiInlineMarkdown(tagName, text) {
+    const normalized = String(text || "");
+    if (!normalized) {
+      return "";
+    }
+
+    if (tagName === "STRONG" || tagName === "B") {
+      return `**${normalized}**`;
+    }
+
+    if (tagName === "EM" || tagName === "I") {
+      return `*${normalized}*`;
+    }
+
+    if (tagName === "S" || tagName === "DEL" || tagName === "STRIKE") {
+      return `~~${normalized}~~`;
+    }
+
+    if (tagName === "CODE" || tagName === "KBD") {
+      const escaped = unescapeMarkdownPlainText(normalized).replace(/`/g, "\\`");
+      return `\`${escaped}\``;
+    }
+
+    if (tagName === "MARK") {
+      return `**${normalized}**`;
+    }
+
+    return normalized;
+  }
+
+  function collectWikiInlineMarkdown(node, rootBoundary) {
+    if (isTextNode(node)) {
+      return escapeMarkdownPlainText(node.textContent || "");
+    }
+
+    if (!isElementNode(node) || !isVisibleElement(node) || isWikiExcludedSubtreeRoot(node) || isWikiInlineNoiseElement(node)) {
+      return "";
+    }
+
+    const tagName = getTagName(node);
+    if (tagName === "BR") {
+      return "\n";
+    }
+
+    if (tagName === "IMG") {
+      return isWikiUiImageElement(node, rootBoundary) ? "" : buildWikiImageMarkdownFromElement(node);
+    }
+
+    if (tagName === "A") {
+      if (String(node.className || "").includes("yfm-anchor")) {
+        return "";
+      }
+
+      const linkText = normalizeInlineText(Array.from(node.childNodes || []).map(child => collectWikiInlineMarkdown(child, rootBoundary)).join(""));
+      if (!linkText) {
+        return "";
+      }
+
+      if (linkText.startsWith("![")) {
+        return linkText;
+      }
+
+      const href = resolveMarkdownHref(node);
+      if (!href) {
+        return linkText;
+      }
+
+      return `[${linkText}](${href})`;
+    }
+
+    const parts = [];
+    for (const child of Array.from(node.childNodes || [])) {
+      const piece = collectWikiInlineMarkdown(child, rootBoundary);
+      if (!piece) {
+        continue;
+      }
+
+      if (isElementNode(child) && BLOCK_BREAK_TAGS.has(getTagName(child))) {
+        parts.push(`\n${piece}\n`);
+      } else {
+        parts.push(piece);
+      }
+    }
+
+    return wrapWikiInlineMarkdown(tagName, parts.join(""));
+  }
+
+  function createWikiParagraphNode(markdownText) {
+    const normalized = normalizeBlockText(markdownText);
+    if (!normalized) {
+      return null;
+    }
+
+    return {
+      kind: "paragraph",
+      text: normalized
+    };
+  }
+
+  function collectWikiListItemContent(listItem, rootBoundary) {
+    const textParts = [];
+    const nestedLines = [];
+
+    for (const child of Array.from(listItem.childNodes || [])) {
+      if (isTextNode(child)) {
+        textParts.push(child.textContent || "");
+        continue;
+      }
+
+      if (!isElementNode(child) || !isVisibleElement(child) || isWikiExcludedSubtreeRoot(child)) {
+        continue;
+      }
+
+      const tagName = getTagName(child);
+      if (tagName === "UL" || tagName === "OL") {
+        nestedLines.push(...collectWikiNestedListLines(child, "  ", rootBoundary));
+        continue;
+      }
+
+      textParts.push(collectWikiInlineMarkdown(child, rootBoundary));
+    }
+
+    const primaryText = normalizeBlockText(textParts.join(" "));
+    if (!primaryText && !nestedLines.length) {
+      return "";
+    }
+
+    if (!nestedLines.length) {
+      return primaryText;
+    }
+
+    return [primaryText, ...nestedLines].filter(Boolean).join("\n");
+  }
+
+  function collectWikiNestedListLines(listElement, indent, rootBoundary) {
+    const ordered = getTagName(listElement) === "OL";
+    const lines = [];
+    let displayIndex = 1;
+
+    for (const child of Array.from(listElement.children || [])) {
+      if (getTagName(child) !== "LI" || !isVisibleElement(child) || isWikiExcludedSubtreeRoot(child)) {
+        continue;
+      }
+
+      const itemText = collectWikiListItemContent(child, rootBoundary);
+      if (!itemText) {
+        continue;
+      }
+
+      const itemLines = itemText.split("\n");
+      const marker = ordered ? `${displayIndex}.` : "-";
+      const [firstLine, ...restLines] = itemLines;
+
+      if (firstLine) {
+        lines.push(`${indent}${marker} ${firstLine}`);
+      } else {
+        lines.push(`${indent}${marker}`);
+      }
+
+      restLines.forEach(line => {
+        lines.push(`${indent}${line}`);
+      });
+
+      displayIndex += 1;
+    }
+
+    return lines;
+  }
+
+  function extractWikiListNode(listElement, rootBoundary) {
+    const ordered = getTagName(listElement) === "OL";
+    const items = [];
+
+    for (const child of Array.from(listElement.children || [])) {
+      if (getTagName(child) !== "LI" || !isVisibleElement(child) || isWikiExcludedSubtreeRoot(child)) {
+        continue;
+      }
+
+      const content = collectWikiListItemContent(child, rootBoundary);
+      if (content) {
+        items.push(content);
+      }
+    }
+
+    if (!items.length) {
+      return null;
+    }
+
+    return {
+      kind: ordered ? "ordered_list" : "unordered_list",
+      items
+    };
+  }
+
+  function extractWikiHeadingNode(element) {
+    const tagName = getTagName(element);
+    if (!/^H[1-6]$/.test(tagName)) {
+      return null;
+    }
+
+    const normalizedClone = element.cloneNode(true);
+    Array.from(
+      normalizedClone.querySelectorAll("a.yfm-anchor, .HeadingEditor, .HeadingClipboardButton, .visually-hidden, button")
+    ).forEach(node => {
+      node.remove();
+    });
+
+    const text = normalizeInlineText(normalizedClone.textContent || "");
+    if (!text) {
+      return null;
+    }
+
+    return {
+      kind: "heading",
+      level: Number(tagName.slice(1)),
+      text
+    };
+  }
+
+  function extractWikiBlockquoteNode(element, rootBoundary) {
+    const text = normalizeBlockText(collectWikiInlineMarkdown(element, rootBoundary));
+    if (!text) {
+      return null;
+    }
+
+    return {
+      kind: "blockquote",
+      text
+    };
+  }
+
+  function isWikiSkippableElement(element, rootBoundary) {
+    if (!isElementNode(element) || !isVisibleElement(element)) {
+      return true;
+    }
+
+    if (isWikiExcludedSubtreeRoot(element) || isInteractiveControlElement(element)) {
+      return true;
+    }
+
+    if (matchesWikiUiTerm(element.className) || matchesWikiUiTerm(element.id)) {
+      return true;
+    }
+
+    if (isWikiMetadataElement(element)) {
+      return true;
+    }
+
+    return Boolean(rootBoundary && rootBoundary !== element && isWikiUiImageElement(element, rootBoundary));
+  }
+
+  function tryExtractWikiSemanticNode(element, rootBoundary) {
+    if (isWikiSkippableElement(element, rootBoundary)) {
+      return null;
+    }
+
+    const headingNode = extractWikiHeadingNode(element);
+    if (headingNode) {
+      return headingNode;
+    }
+
+    const tagName = getTagName(element);
+
+    if (tagName === "P") {
+      return createWikiParagraphNode(collectWikiInlineMarkdown(element, rootBoundary));
+    }
+
+    if (tagName === "UL" || tagName === "OL") {
+      return extractWikiListNode(element, rootBoundary);
+    }
+
+    if (tagName === "BLOCKQUOTE") {
+      return extractWikiBlockquoteNode(element, rootBoundary);
+    }
+
+    if (tagName === "PRE") {
+      return extractCodeBlockNode(element);
+    }
+
+    if (tagName === "HR") {
+      return {
+        kind: "hr"
+      };
+    }
+
+    if (tagName === "TABLE") {
+      return extractTableNode(element);
+    }
+
+    if (tagName === "IMG") {
+      return createWikiParagraphNode(collectWikiInlineMarkdown(element, rootBoundary));
+    }
+
+    if (isTextOnlyBlockElement(element)) {
+      return createWikiParagraphNode(collectWikiInlineMarkdown(element, rootBoundary));
+    }
+
+    return null;
+  }
+
+  function extractWikiChildNodes(container, rootBoundary, nodes) {
+    const textBuffer = [];
+
+    function flushTextBuffer() {
+      if (!textBuffer.length) {
+        return;
+      }
+
+      const textNode = createWikiParagraphNode(textBuffer.join(""));
+      textBuffer.length = 0;
+      if (textNode) {
+        nodes.push(textNode);
+      }
+    }
+
+    for (const child of Array.from(container.childNodes || [])) {
+      if (isTextNode(child)) {
+        textBuffer.push(child.textContent || "");
+        continue;
+      }
+
+      if (!isElementNode(child) || isWikiSkippableElement(child, rootBoundary)) {
+        continue;
+      }
+
+      const semanticNode = tryExtractWikiSemanticNode(child, rootBoundary);
+      if (semanticNode) {
+        flushTextBuffer();
+        nodes.push(semanticNode);
+        continue;
+      }
+
+      flushTextBuffer();
+      extractWikiChildNodes(child, rootBoundary, nodes);
+    }
+
+    flushTextBuffer();
+  }
+
+  function extractWikiSourceAst(root) {
+    if (!root) {
+      return [];
+    }
+
+    const nodes = [];
+    extractWikiChildNodes(root, root, nodes);
+    return nodes.filter(node => {
+      if (!node || !node.kind) {
+        return false;
+      }
+
+      if (node.kind === "paragraph") {
+        return !isWikiMetadataText(node.text);
+      }
+
+      return true;
+    });
+  }
+
+  function inferWikiImageMimeType(url) {
+    const normalized = String(url || "").toLowerCase();
+    const match = normalized.match(/(\.png|\.jpe?g|\.gif|\.webp|\.svg)(?:$|[?#])/i);
+    if (!match) {
+      return "";
+    }
+
+    if (match[1] === ".png") return "image/png";
+    if (match[1] === ".jpg" || match[1] === ".jpeg") return "image/jpeg";
+    if (match[1] === ".gif") return "image/gif";
+    if (match[1] === ".webp") return "image/webp";
+    if (match[1] === ".svg") return "image/svg+xml";
+    return "";
+  }
+
+  function buildWikiAssetFileName(url, index) {
+    const fallback = `wiki-image-${index + 1}`;
+
+    try {
+      const parsed = new URL(url);
+      const pathname = parsed.pathname || "";
+      const fileName = pathname.split("/").filter(Boolean).pop() || "";
+      return decodeURIComponent(fileName || fallback) || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function extractWikiInlineImageAssets(root) {
+    const imageElements = Array.from((root && root.querySelectorAll("img")) || []);
+    const assets = [];
+    const seen = new Set();
+    let filteredUiImageCount = 0;
+
+    imageElements.forEach((element, index) => {
+      if (isWikiUiImageElement(element, root)) {
+        filteredUiImageCount += 1;
+        return;
+      }
+
+      const imageUrl = resolveWikiImageUrl(element);
+      if (!imageUrl || seen.has(imageUrl)) {
+        return;
+      }
+
+      seen.add(imageUrl);
+      assets.push({
+        id: imageUrl,
+        path: imageUrl,
+        fileName: buildWikiAssetFileName(imageUrl, index),
+        mimeType: inferWikiImageMimeType(imageUrl),
+        byteLength: 0
+      });
+    });
+
+    assets.domImageCount = imageElements.length;
+    assets.filteredUiImageCount = filteredUiImageCount;
+    return assets;
+  }
+
+  function getWikiSourceSlug(sourceUrl) {
+    try {
+      return String(new URL(sourceUrl).pathname || "").replace(/^\/+|\/+$/g, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function pickWikiTitleFromAst(ast, fallbackTitle) {
+    const headingNode = (Array.isArray(ast) ? ast : []).find(node => {
+      return node && node.kind === "heading" && node.level === 1 && normalizeInlineText(node.text || "");
+    });
+    if (headingNode) {
+      return normalizeInlineText(headingNode.text || "");
+    }
+
+    return normalizeInlineText(fallbackTitle || "");
+  }
+
+  function buildWikiStructuredPayload(ast, assets, sourceUrl, pageMetadata = {}) {
+    const normalizedAst = Array.isArray(ast) ? ast : [];
+    const normalizedAssets = Array.isArray(assets) ? assets : [];
+    const title = pickWikiTitleFromAst(normalizedAst, pageMetadata.documentTitle || "");
+    const effectiveAst = dropDuplicateTitleHeading(normalizedAst, title);
+    const bodyMarkdown = compileSourceAstToMarkdown(effectiveAst);
+    const domImageCount = Number(pageMetadata.domImageCount || normalizedAssets.domImageCount || 0);
+    const filteredUiImageCount = Number(
+      pageMetadata.filteredUiImageCount ||
+        normalizedAssets.filteredUiImageCount ||
+        Math.max(0, domImageCount - normalizedAssets.length)
+    );
+
+    return {
+      title,
+      markdown: buildMarkdownWithTitle(title, bodyMarkdown),
+      sourceUrl: String(sourceUrl || ""),
+      sourceSlug: getWikiSourceSlug(sourceUrl),
+      documentId: "",
+      collectionId: "",
+      revision: 0,
+      provider: "wiki",
+      providerLabel: "Wiki",
+      sourceMode: "Wiki rendered DOM",
+      bridgeVersion: BRIDGE_BUILD,
+      capturedAt: new Date().toISOString(),
+      blockCount: effectiveAst.length,
+      sourceStorageId: "",
+      assetBasePath: "",
+      assets: normalizedAssets.slice(),
+      assetCount: normalizedAssets.length,
+      diagnostics: {
+        contentRootSelector: String(pageMetadata.contentRootSelector || "").trim(),
+        domImageCount,
+        filteredUiImageCount
+      }
     };
   }
 
@@ -3026,7 +3709,10 @@
     findProseMirrorDocRoot,
     findTypedBlockRoot,
     findYonoteContentRoot,
+    findWikiContentRoot,
     extractYonoteSourceAst,
+    extractWikiSourceAst,
+    extractWikiInlineImageAssets,
     extractYonoteSourceAstFromStructuredPayload,
     extractSourceAstFromProseMirrorNode,
     extractSourceAstFromTypedBlock,
@@ -3034,6 +3720,7 @@
     isMeaningfulStructuredAst,
     compileSourceAstToMarkdown,
     buildYonoteStructuredPayload,
+    buildWikiStructuredPayload,
     buildYonoteFallbackPayload,
     buildYonoteNativeExportPayload,
     buildYonoteSourceResult,

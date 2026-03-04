@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "practicum helper source copier",
-  "version": "3.4.4",
-  "description": "Render-aware copier from Yonote to Praktikum theory",
+  "version": "3.5.0",
+  "description": "Render-aware copier from Yonote and Wiki to Praktikum theory",
   "icons": {
     "16": "icon16.png"
   },
@@ -20,6 +20,9 @@
   "host_permissions": [
     "https://yonote.ru/*",
     "https://*.yonote.ru/*",
+    "https://wiki.yandex-team.ru/*",
+    "https://*.wiki.yandex-team.ru/*",
+    "https://s3.mds.yandex.net/*",
     "https://storage.yandexcloud.net/*",
     "https://*.storage.yandexcloud.net/*",
     "https://admin.praktikum.yandex-team.ru/*",
@@ -46,6 +49,30 @@
       "js": [
         "bridges/common.js",
         "bridges/yonote-relay.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://wiki.yandex-team.ru/*",
+        "https://*.wiki.yandex-team.ru/*"
+      ],
+      "js": [
+        "bridges/common.js",
+        "bridges/wiki-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://wiki.yandex-team.ru/*",
+        "https://*.wiki.yandex-team.ru/*"
+      ],
+      "js": [
+        "bridges/common.js",
+        "bridges/wiki-relay.js"
       ],
       "run_at": "document_start",
       "world": "ISOLATED"

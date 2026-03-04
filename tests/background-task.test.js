@@ -25,10 +25,10 @@ test("status presentation keeps warning styling for timed-out reload success", (
   assert.deepEqual(
     getBackgroundTaskStatus({
       stage: BACKGROUND_TASK_STAGES.RUNNING,
-      message: "Собираю source в фоне..."
+      message: "Считываю контент источника..."
     }),
     {
-      message: "Собираю source в фоне...",
+      message: "Считываю контент источника...",
       type: "syncing"
     }
   );

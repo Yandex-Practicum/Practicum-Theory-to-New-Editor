@@ -22,6 +22,10 @@ export function getStaleBridgeErrorMessage(kind) {
     return "На вкладке работает устаревший bridge. Обновите саму страницу теории.";
   }
 
+  if (kind === BRIDGE_KINDS.WIKI) {
+    return "На вкладке работает устаревший bridge. Обновите саму страницу wiki.";
+  }
+
   return "На вкладке работает устаревший bridge. Обновите саму страницу Yonote.";
 }
 

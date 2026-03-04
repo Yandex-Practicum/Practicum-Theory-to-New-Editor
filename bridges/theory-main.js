@@ -9,7 +9,7 @@
     rootBlockId: "",
     treeId: ""
   };
-  const THEORY_BLOCK_CREATE_BATCH_SIZE = 6;
+  const THEORY_BLOCK_CREATE_BATCH_SIZE = 9;
 
   function updateContext(nextValues) {
     if (nextValues.authToken) {

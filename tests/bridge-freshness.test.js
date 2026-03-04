@@ -114,3 +114,30 @@ test("bridge freshness does not reinject when the first response already matches
   assert.equal(injectCount, 0);
   assert.equal(response.bridgeKind, "theory");
 });
+
+test("bridge freshness reports a wiki-specific stale bridge error", () => {
+  assert.equal(
+    getStaleBridgeErrorMessage(BRIDGE_KINDS.WIKI),
+    "На вкладке работает устаревший bridge. Обновите саму страницу wiki."
+  );
+});
+
+test("bridge freshness accepts a reinjected wiki response", async () => {
+  let injectCount = 0;
+
+  const response = await sendMessageWithBridgeFreshness({
+    tabId: 2,
+    kind: BRIDGE_KINDS.WIKI,
+    message: { type: "TEST" },
+    sendMessage: createSend([
+      { bridgeVersion: "old-build", bridgeKind: "wiki", success: true },
+      { bridgeVersion: EXT_BUILD, bridgeKind: "wiki", success: true }
+    ]),
+    injectBridge: async () => {
+      injectCount += 1;
+    }
+  });
+
+  assert.equal(injectCount, 1);
+  assert.equal(response.bridgeKind, "wiki");
+});
