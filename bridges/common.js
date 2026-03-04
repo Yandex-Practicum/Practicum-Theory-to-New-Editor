@@ -1,5 +1,5 @@
 (function initPracticumHelperBridgeShared() {
-  const BRIDGE_BUILD = "3.5.0-background-worker-r3";
+  const BRIDGE_BUILD = "3.5.1-background-worker-r2";
   const existingShared = globalThis.PracticumHelperBridgeShared;
   if (existingShared && existingShared.bridgeVersion === BRIDGE_BUILD) {
     return;
@@ -1590,7 +1590,7 @@
     }
 
     if (tagName === "MARK") {
-      return `**${normalized}**`;
+      return normalized;
     }
 
     return normalized;

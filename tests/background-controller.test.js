@@ -250,6 +250,22 @@ test("copy flow humanizes message-channel-closed bridge errors", async () => {
   assert.equal(state.task.message, "Страница была закрыта или перезагружена до ответа. Повторите действие.");
 });
 
+test("copy flow humanizes message-port-closed bridge errors", async () => {
+  const { controller, state } = createHarness({
+    sendBridgeMessage: async () => {
+      throw new Error("The message port closed before a response was received.");
+    }
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_COPY_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.equal(state.task.stage, "error");
+  assert.equal(state.task.message, "Страница была закрыта или перезагружена до ответа. Повторите действие.");
+});
+
 test("wiki copy flow uses immediate payload, skips native export, and stores only fetched assets", async () => {
   let receivedKind = "";
   let receivedType = "";

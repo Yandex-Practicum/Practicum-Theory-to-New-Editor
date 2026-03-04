@@ -213,6 +213,10 @@ function humanizeRuntimeError(error) {
     return "Перезагрузите расширение: background worker еще не подключен.";
   }
 
+  if (/message (?:channel|port) closed before a response was received/i.test(message)) {
+    return "Расширение не дождалось ответа. Повторите действие после перезагрузки страницы.";
+  }
+
   return message || "Неизвестная ошибка.";
 }
 

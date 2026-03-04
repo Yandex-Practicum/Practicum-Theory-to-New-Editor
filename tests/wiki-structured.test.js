@@ -47,7 +47,8 @@ test("wiki extractor prefers the inner PageDoc root and keeps semantic content",
   assert.match(markdown, /\*\*Жирный текст\*\*/);
   assert.match(markdown, /\*курсив\*/);
   assert.match(markdown, /`public\.table_name`/);
-  assert.match(markdown, /\*\*важно\*\*/);
+  assert.doesNotMatch(markdown, /\*\*важно\*\*/);
+  assert.match(markdown, /,\nважно,\n/);
   assert.match(markdown, /~~устарело~~/);
   assert.match(markdown, /online\\_store/);
   assert.match(markdown, /tools\\_shop/);

@@ -59,7 +59,7 @@ function toErrorMessage(error) {
     return "Перезагрузите страницу: bridge-скрипт еще не подключен.";
   }
 
-  if (/message channel closed before a response was received/i.test(message)) {
+  if (/message (?:channel|port) closed before a response was received/i.test(message)) {
     return "Страница была закрыта или перезагружена до ответа. Повторите действие.";
   }
 
