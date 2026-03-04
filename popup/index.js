@@ -1,6 +1,7 @@
 import { BACKGROUND_MESSAGE_TYPES, STORAGE_KEY, TASK_STORAGE_KEY } from "../shared/constants.js";
-import { getBackgroundTaskStatus, isBackgroundTaskBusy } from "../shared/background-task.js";
+import { isBackgroundTaskBusy } from "../shared/background-task.js";
 import { loadActiveTask, loadStoredSource, subscribeToStorageChanges } from "../shared/storage.js";
+import { createPopupView } from "./view.js";
 
 const copyButton = document.getElementById("copy-source");
 const insertButton = document.getElementById("insert-source");
@@ -19,6 +20,22 @@ const state = {
   isRequestPending: false,
   unsubscribe: null
 };
+
+const view = createPopupView({
+  elements: {
+    copyButton,
+    insertButton,
+    copyPreviewButton,
+    statusEl,
+    statusTextEl,
+    cancelTaskButton,
+    previewEl,
+    sourceEl,
+    documentEl,
+    timeEl
+  },
+  state
+});
 
 function debugPopup(message, details) {
   try {
@@ -53,9 +70,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  renderPreview(null);
-  renderTaskStatus();
-  syncButtons();
+  view.renderPreview(null);
+  view.renderTaskStatus();
+  view.syncButtons();
 
   state.unsubscribe = subscribeToStorageChanges(changes => {
     if (Object.prototype.hasOwnProperty.call(changes, STORAGE_KEY)) {
@@ -64,15 +81,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         hasMarkdown: Boolean(state.storedSource && state.storedSource.markdown),
         markdownLength: String((state.storedSource && state.storedSource.markdown) || "").length
       });
-      renderPreview(state.storedSource);
-      syncButtons();
+      view.renderPreview(state.storedSource);
+      view.syncButtons();
     }
 
     if (Object.prototype.hasOwnProperty.call(changes, TASK_STORAGE_KEY)) {
       state.activeTask = changes[TASK_STORAGE_KEY].newValue || null;
       debugPopup("Active task updated", state.activeTask);
-      renderTaskStatus();
-      syncButtons();
+      view.renderTaskStatus();
+      view.syncButtons();
     }
   });
 
@@ -102,124 +119,6 @@ async function sendRuntimeMessage(message) {
   });
 }
 
-function setStatus(message, type = "info") {
-  if (!statusEl) {
-    return;
-  }
-
-  if (statusTextEl) {
-    statusTextEl.textContent = message;
-  } else {
-    statusEl.textContent = message;
-  }
-  statusEl.className = type === "info" ? "" : type;
-}
-
-function renderTaskStatus() {
-  const status = getBackgroundTaskStatus(state.activeTask);
-  setStatus(status.message, status.type);
-}
-
-function truncate(text, maxLength = 120) {
-  if (!text) {
-    return "-";
-  }
-
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
-}
-
-function formatDate(isoDate) {
-  if (!isoDate) {
-    return "-";
-  }
-
-  const date = new Date(isoDate);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-
-  return date.toLocaleString("ru-RU");
-}
-
-function setDocumentMeta(label, href) {
-  if (!documentEl) {
-    return;
-  }
-
-  const safeLabel = label || "-";
-  const safeHref = String(href || "").trim();
-  documentEl.textContent = safeLabel;
-  documentEl.title = safeHref || safeLabel;
-  documentEl.href = safeHref || "#";
-  documentEl.classList.toggle("is-empty", !safeHref || safeLabel === "-");
-}
-
-function renderPreview(data) {
-  if (!data) {
-    if (previewEl) {
-      previewEl.textContent = "Пока ничего не скопировано.";
-    }
-    if (sourceEl) {
-      sourceEl.textContent = "-";
-    }
-    setDocumentMeta("-", "");
-    if (timeEl) {
-      timeEl.textContent = "-";
-    }
-    return;
-  }
-
-  if (previewEl) {
-    previewEl.textContent = data.markdown || "Пустой результат.";
-  }
-  if (sourceEl) {
-    sourceEl.textContent = truncate(data.providerLabel || data.provider || "-", 48);
-  }
-  setDocumentMeta(truncate(data.title || data.sourceSlug || data.documentId || "-", 72), data.sourceUrl || "");
-  if (timeEl) {
-    timeEl.textContent = formatDate(data.capturedAt);
-  }
-}
-
-function hasStoredPreview() {
-  return Boolean(state.storedSource && String(state.storedSource.markdown || "").trim());
-}
-
-function syncButtons() {
-  const disableActions = state.isRequestPending || isBackgroundTaskBusy(state.activeTask);
-  const showCancel = isBackgroundTaskBusy(state.activeTask);
-
-  if (copyButton) {
-    copyButton.disabled = disableActions;
-  }
-
-  if (insertButton) {
-    insertButton.disabled = disableActions;
-  }
-
-  if (copyPreviewButton) {
-    copyPreviewButton.disabled = !hasStoredPreview();
-  }
-
-  if (cancelTaskButton) {
-    cancelTaskButton.hidden = !showCancel;
-    cancelTaskButton.disabled = state.isRequestPending || !showCancel;
-  }
-}
-
-function humanizeRuntimeError(error) {
-  const message = error instanceof Error ? error.message : String(error || "");
-  if (/Receiving end does not exist/i.test(message) || /Could not establish connection/i.test(message)) {
-    return "Перезагрузите расширение: background worker еще не подключен.";
-  }
-
-  if (/message (?:channel|port) closed before a response was received/i.test(message)) {
-    return "Расширение не дождалось ответа. Повторите действие после перезагрузки страницы.";
-  }
-
-  return message || "Неизвестная ошибка.";
-}
-
 async function hydratePopup() {
   async function loadInitialTask() {
     try {
@@ -242,34 +141,34 @@ async function hydratePopup() {
       hasMarkdown: Boolean(state.storedSource && state.storedSource.markdown),
       markdownLength: String((state.storedSource && state.storedSource.markdown) || "").length
     });
-    renderPreview(state.storedSource);
+    view.renderPreview(state.storedSource);
   }
 
   if (taskResult.status === "fulfilled") {
     state.activeTask = taskResult.value && taskResult.value.task ? taskResult.value.task : null;
     debugPopup("Initial task loaded", state.activeTask);
-    renderTaskStatus();
+    view.renderTaskStatus();
   } else {
     state.activeTask = null;
     debugPopup("Initial task load failed", taskResult.reason);
-    setStatus(humanizeRuntimeError(taskResult.reason), "warning");
+    view.setStatus(view.humanizeRuntimeError(taskResult.reason), "warning");
   }
 
-  syncButtons();
+  view.syncButtons();
 }
 
 async function startBackgroundAction(messageType) {
   if (state.isRequestPending || isBackgroundTaskBusy(state.activeTask)) {
-    renderTaskStatus();
+    view.renderTaskStatus();
     return;
   }
 
   state.isRequestPending = true;
-  setStatus(
+  view.setStatus(
     messageType === BACKGROUND_MESSAGE_TYPES.START_COPY_SOURCE ? "Запускаю копирование..." : "Запускаю вставку...",
     "syncing"
   );
-  syncButtons();
+  view.syncButtons();
 
   try {
     const response = await sendRuntimeMessage({ type: messageType });
@@ -277,59 +176,59 @@ async function startBackgroundAction(messageType) {
     if (response && response.accepted) {
       state.activeTask = response.task || null;
       debugPopup("Background task accepted", state.activeTask);
-      renderTaskStatus();
+      view.renderTaskStatus();
       return;
     }
 
     if (response && response.task && isBackgroundTaskBusy(response.task)) {
       state.activeTask = response.task;
       debugPopup("Background task rejected because another task is active", state.activeTask);
-      renderTaskStatus();
+      view.renderTaskStatus();
       return;
     }
 
-    setStatus((response && response.error) || "Не удалось запустить фоновую задачу.", "error");
+    view.setStatus((response && response.error) || "Не удалось запустить фоновую задачу.", "error");
   } catch (error) {
-    setStatus(humanizeRuntimeError(error), "error");
+    view.setStatus(view.humanizeRuntimeError(error), "error");
   } finally {
     state.isRequestPending = false;
-    syncButtons();
+    view.syncButtons();
   }
 }
 
 async function cancelBackgroundTask() {
   if (state.isRequestPending || !isBackgroundTaskBusy(state.activeTask)) {
-    renderTaskStatus();
+    view.renderTaskStatus();
     return;
   }
 
   state.isRequestPending = true;
-  setStatus("Прерываю задачу...", "warning");
-  syncButtons();
+  view.setStatus("Прерываю задачу...", "warning");
+  view.syncButtons();
 
   try {
     const response = await sendRuntimeMessage({ type: BACKGROUND_MESSAGE_TYPES.CANCEL_ACTIVE_TASK });
     state.activeTask = response && response.task ? response.task : null;
-    renderTaskStatus();
+    view.renderTaskStatus();
   } catch (error) {
-    setStatus(humanizeRuntimeError(error), "error");
+    view.setStatus(view.humanizeRuntimeError(error), "error");
   } finally {
     state.isRequestPending = false;
-    syncButtons();
+    view.syncButtons();
   }
 }
 
 async function copyPreviewToClipboard() {
-  const text = hasStoredPreview() ? String(state.storedSource.markdown || "").trim() : "";
+  const text = view.hasStoredPreview() ? String(state.storedSource.markdown || "").trim() : "";
   if (!text) {
-    setStatus("Пока нечего копировать.", "warning");
+    view.setStatus("Пока нечего копировать.", "warning");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(text);
-    setStatus("Preview скопирован в буфер обмена.", "success");
+    view.setStatus("Preview скопирован в буфер обмена.", "success");
   } catch {
-    setStatus("Не удалось скопировать preview.", "error");
+    view.setStatus("Не удалось скопировать preview.", "error");
   }
 }

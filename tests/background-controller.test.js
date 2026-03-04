@@ -555,7 +555,7 @@ test("insert flow uploads stored images and rewrites markdown before append", as
     sendBridgeMessage: async ({ message }) => {
       if (message.type === MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE) {
         uploadRequests += 1;
-        assert.equal(message.fileName, "picture.png");
+        assert.match(message.fileName, /^picture-[a-f0-9]{8}\.png$/);
         assert.equal(message.mimeType, "image/png");
         assert.equal(message.bytesBase64, "AQID");
         return {
@@ -655,10 +655,12 @@ test("insert flow starts multiple image uploads before waiting for responses", a
   });
   await runScheduledTasks(state);
 
-  assert.deepEqual(startedUploads, ["a.png", "b.png"]);
+  assert.equal(startedUploads.length, 2);
+  assert.match(startedUploads[0], /^a-[a-f0-9]{8}\.png$/);
+  assert.match(startedUploads[1], /^b-[a-f0-9]{8}\.png$/);
   assert.equal(appendRequests, 0);
 
-  uploadResolvers.get("a.png")({
+  uploadResolvers.get(startedUploads[0])({
     success: true,
     fileUrl: "https://pictures.s3.yandex.net/resources/a.png"
   });
@@ -667,7 +669,7 @@ test("insert flow starts multiple image uploads before waiting for responses", a
   }
   assert.equal(appendRequests, 0);
 
-  uploadResolvers.get("b.png")({
+  uploadResolvers.get(startedUploads[1])({
     success: true,
     fileUrl: "https://pictures.s3.yandex.net/resources/b.png"
   });
@@ -704,6 +706,7 @@ test("insert flow preserves markdown image title metadata when rewriting uploade
     }),
     sendBridgeMessage: async ({ message }) => {
       if (message.type === MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE) {
+        assert.match(message.fileName, /^image-[a-f0-9]{8}\.png$/);
         return {
           success: true,
           fileUrl: "https://pictures.s3.yandex.net/resources/picture_1.png"
@@ -761,7 +764,7 @@ test("insert flow rewrites absolute wiki image urls after upload", async () => {
     }),
     sendBridgeMessage: async ({ message }) => {
       if (message.type === MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE) {
-        assert.equal(message.fileName, "inline-diagram.png");
+        assert.match(message.fileName, /^inline-diagram-[a-f0-9]{8}\.png$/);
         return {
           success: true,
           fileUrl: "https://pictures.s3.yandex.net/resources/wiki-image.png"
@@ -788,6 +791,72 @@ test("insert flow rewrites absolute wiki image urls after upload", async () => {
   await runScheduledTasks(state);
 
   assert.equal(appendMarkdown, "![ALT](https://pictures.s3.yandex.net/resources/wiki-image.png)");
+});
+
+test("insert flow uses unique upload file names for assets with the same basename", async () => {
+  const seenFileNames = [];
+
+  const { controller, state } = createHarness({
+    initialSource: {
+      markdown: "![A](images/one/image.png)\n\n![B](images/two/image.png)",
+      sourceStorageId: "source-1",
+      assetBasePath: "",
+      assets: [
+        {
+          id: "images/one/image.png",
+          path: "images/one/image.png",
+          fileName: "image.png",
+          mimeType: "image/png",
+          byteLength: 3
+        },
+        {
+          id: "images/two/image.png",
+          path: "images/two/image.png",
+          fileName: "image.png",
+          mimeType: "image/png",
+          byteLength: 3
+        }
+      ]
+    },
+    initialSourceAssets: new Map([
+      ["source-1:images/one/image.png", new Uint8Array([1, 2, 3]).buffer],
+      ["source-1:images/two/image.png", new Uint8Array([4, 5, 6]).buffer]
+    ]),
+    getActiveTab: async () => ({
+      id: 77,
+      url: "https://admin.praktikum.yandex-team.ru/course/lesson/theory/"
+    }),
+    sendBridgeMessage: async ({ message }) => {
+      if (message.type === MESSAGE_TYPES.UPLOAD_THEORY_RESOURCE) {
+        seenFileNames.push(message.fileName);
+        return {
+          success: true,
+          fileUrl: `https://pictures.s3.yandex.net/resources/${message.fileName}`
+        };
+      }
+
+      if (message.type === MESSAGE_TYPES.APPEND_TEXT_BLOCKS) {
+        return {
+          success: true,
+          appendedCount: 2,
+          tableCount: 0,
+          imageCount: 2
+        };
+      }
+
+      throw new Error(`Unexpected message type: ${message.type}`);
+    }
+  });
+
+  await controller.handleRuntimeMessage({
+    type: BACKGROUND_MESSAGE_TYPES.START_INSERT_SOURCE
+  });
+  await runScheduledTasks(state);
+
+  assert.equal(seenFileNames.length, 2);
+  assert.notEqual(seenFileNames[0], seenFileNames[1]);
+  assert.match(seenFileNames[0], /^image-[a-f0-9]{8}\.png$/);
+  assert.match(seenFileNames[1], /^image-[a-f0-9]{8}\.png$/);
 });
 
 test("insert flow escapes snake_case in plain text without touching markdown syntax", async () => {

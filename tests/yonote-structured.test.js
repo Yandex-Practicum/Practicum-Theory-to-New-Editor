@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { JSDOM } from "jsdom";
+import { loadBridgeSharedSource } from "./helpers/load-bridge-shared.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const commonBridgeSource = readFileSync(path.join(__dirname, "..", "bridges", "common.js"), "utf8");
+const commonBridgeSource = loadBridgeSharedSource();
 
 async function loadFixture(name) {
   const html = await readFile(path.join(__dirname, "fixtures", "yonote", name), "utf8");

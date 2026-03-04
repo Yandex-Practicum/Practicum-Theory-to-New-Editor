@@ -1,4 +1,5 @@
 import { BRIDGE_KINDS, BACKGROUND_MESSAGE_TYPES } from "./shared/constants.js";
+import { getBridgeScriptFiles } from "./shared/bridge-script-files.js";
 import { sendMessageWithBridgeFreshness } from "./shared/bridge-freshness.js";
 import { createBackgroundController, isBackgroundRuntimeMessage } from "./shared/background-controller.js";
 import { requestYonoteNativeExport } from "./shared/native-export.js";
@@ -7,25 +8,14 @@ import { loadActiveTask, loadStoredSource, saveActiveTask, saveStoredSource } fr
 import { connectToTab, executeFilesInTab, getActiveTab, reloadTab, sendMessageToTab } from "./shared/tabs.js";
 
 async function injectBridgeFiles(tabId, kind) {
-  if (kind === BRIDGE_KINDS.YONOTE) {
-    await executeFilesInTab(tabId, ["bridges/common.js", "bridges/yonote-main.js"], "MAIN");
-    await executeFilesInTab(tabId, ["bridges/common.js", "bridges/yonote-relay.js"], "ISOLATED");
-    return;
+  const mainFiles = getBridgeScriptFiles(kind, "MAIN");
+  const isolatedFiles = getBridgeScriptFiles(kind, "ISOLATED");
+  if (!mainFiles.length || !isolatedFiles.length) {
+    throw new Error("Неизвестный тип bridge-инъекции.");
   }
 
-  if (kind === BRIDGE_KINDS.WIKI) {
-    await executeFilesInTab(tabId, ["bridges/common.js", "bridges/wiki-main.js"], "MAIN");
-    await executeFilesInTab(tabId, ["bridges/common.js", "bridges/wiki-relay.js"], "ISOLATED");
-    return;
-  }
-
-  if (kind === BRIDGE_KINDS.THEORY) {
-    await executeFilesInTab(tabId, ["bridges/common.js", "bridges/theory-main.js"], "MAIN");
-    await executeFilesInTab(tabId, ["bridges/common.js", "bridges/theory-relay.js"], "ISOLATED");
-    return;
-  }
-
-  throw new Error("Неизвестный тип bridge-инъекции.");
+  await executeFilesInTab(tabId, mainFiles, "MAIN");
+  await executeFilesInTab(tabId, isolatedFiles, "ISOLATED");
 }
 
 async function sendBridgeMessage({ tabId, kind, message }) {

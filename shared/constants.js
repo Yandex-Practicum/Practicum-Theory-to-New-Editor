@@ -1,6 +1,6 @@
 export const STORAGE_KEY = "copiedMarkdown";
 export const TASK_STORAGE_KEY = "activeBackgroundTask";
-export const EXT_BUILD = "3.5.1-background-worker-r2";
+export const EXT_BUILD = "3.5.3-background-worker";
 
 export function scopeBridgeName(name, build = EXT_BUILD) {
   return `${name}::${build}`;
