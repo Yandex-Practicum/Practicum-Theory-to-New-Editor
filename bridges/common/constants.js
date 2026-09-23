@@ -2,7 +2,7 @@
   const bridgeInternals = globalThis.__PHBridgeInternals || (globalThis.__PHBridgeInternals = {});
   Object.assign(globalThis, bridgeInternals);
 
-  const BRIDGE_BUILD = "3.5.3-background-worker";
+  const BRIDGE_BUILD = "3.5.4-background-worker";
 
   function scopeBridgeName(name) {
     return `${name}::${BRIDGE_BUILD}`;

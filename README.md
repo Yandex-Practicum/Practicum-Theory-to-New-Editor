@@ -9,7 +9,9 @@
 - копирует контент со страниц `yonote.ru` и `wiki.yandex-team.ru`
 - подготавливает текст для вставки в редактор теории Praktikum
 - переносит доступные изображения и связанные ассеты
-- помогает вставить результат на страницах `admin.praktikum.yandex-team.ru`
+- помогает вставить результат на страницах `admin.praktikum.yandex-team.ru` и `admin-prestable.practicum.yandex-team.ru`
+
+С версии `3.5.4` поддерживается новый адрес prestable: https://admin-prestable.practicum.yandex-team.ru/. Старый адрес `prestable.admin.praktikum.yandex-team.ru` также поддерживается.
 
 ## Как установить локально через dev-режим
 

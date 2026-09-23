@@ -488,14 +488,14 @@ test("GET_ACTIVE_TASK recovers stale starting task but keeps a recent running ta
   assert.equal(stillRunning.task.stage, "running");
 });
 
-test("insert flow moves into reloading and completes from tabs.onUpdated", async () => {
+test("insert flow on migrated prestable moves into reloading and completes from tabs.onUpdated", async () => {
   const { controller, state } = createHarness({
     initialSource: {
       markdown: "# Title\n\nText"
     },
     getActiveTab: async () => ({
       id: 77,
-      url: "https://admin.praktikum.yandex-team.ru/course/lesson/theory/"
+      url: "https://admin-prestable.practicum.yandex-team.ru/course/lesson/theory/"
     }),
     sendBridgeMessage: async ({ kind }) => {
       assert.equal(kind, "theory");

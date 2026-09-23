@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Practicum Theory to New Editor",
   "short_name": "Practicum Theory to New Editor",
-  "version": "3.5.3",
+  "version": "3.5.4",
   "description": "Render-aware copier from Yonote and Wiki to Praktikum theory",
   "icons": {
     "16": "icon128.png",
@@ -28,7 +28,8 @@
     "https://storage.yandexcloud.net/*",
     "https://*.storage.yandexcloud.net/*",
     "https://admin.praktikum.yandex-team.ru/*",
-    "https://*.admin.praktikum.yandex-team.ru/*"
+    "https://*.admin.praktikum.yandex-team.ru/*",
+    "https://admin-prestable.practicum.yandex-team.ru/*"
   ],
   "content_scripts": [
     {
@@ -162,7 +163,8 @@
     {
       "matches": [
         "https://admin.praktikum.yandex-team.ru/*",
-        "https://*.admin.praktikum.yandex-team.ru/*"
+        "https://*.admin.praktikum.yandex-team.ru/*",
+        "https://admin-prestable.practicum.yandex-team.ru/*"
       ],
       "js": [
         "bridges/common/constants.js",
@@ -194,7 +196,8 @@
     {
       "matches": [
         "https://admin.praktikum.yandex-team.ru/*",
-        "https://*.admin.praktikum.yandex-team.ru/*"
+        "https://*.admin.praktikum.yandex-team.ru/*",
+        "https://admin-prestable.practicum.yandex-team.ru/*"
       ],
       "js": [
         "bridges/common/constants.js",
